@@ -6,7 +6,7 @@ The name is the mechanism: momentum carries a run forward, and an agent only sto
 
 ## Why
 
-Measured on a real 279-turn research session (`fixtures/corpus`):
+Measured on a real 279-turn research session (`01a166c1…`, corpus in `fixtures/corpus`):
 
 | | |
 |---|---|
@@ -16,6 +16,8 @@ Measured on a real 279-turn research session (`fixtures/corpus`):
 | one-word replies that become unnecessary | **197** |
 
 The decisive observation: partway through that session the user typed *"如果不会出现爆盘之类的严重问题，你可以直接执行完，不用询问我"* — and the agent still ended **73 of the next 92 turns** with a question. Prompt-level politeness does not hold. The gate has to sit in the loop.
+
+The measurement session (`01a166c1…`) is not the session that built this project (`01a1f161…`). Their roles and provenance are documented in [`fixtures/README.md`](fixtures/README.md).
 
 ## How it works
 
@@ -84,6 +86,6 @@ src/rules.ts     system prompt contract
 src/index.ts     the extension: inject, gate, cap, commands
 scripts/         corpus extraction + offline scoring
 test/smoke.ts    fake ExtensionAPI harness, no Pi boot required
-fixtures/        session transcript (gitignored) + derived corpus (committed)
+fixtures/        raw transcripts (gitignored) + derived corpus (committed)
 docs/DESIGN.md   evidence, rule derivation, open questions
 ```

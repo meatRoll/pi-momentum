@@ -3,5 +3,7 @@ dist/
 *.log
 
 # Raw session transcripts are large and local-only; the derived corpus is committed.
+# Exception: the 402 KB pi-momentum origin session is the migration artifact itself.
 fixtures/sessions/*.jsonl
 fixtures/sessions/*.json
+!fixtures/sessions/01a1f161-1eb4-7234-882b-193dd06a2707.jsonl
