@@ -22,14 +22,29 @@ The raw transcript is private and is not in this repository; the figures above c
 ## Modes
 
 ```
-/momentum virtual    # read the last message, reply in the user's voice when it is waiting
-/momentum nudge      # fixed instruction telling the agent to keep going
-/momentum off
-/momentum dry        # decide, print what it would do, send nothing
+/momentum nudge      # push the agent to continue; never speaks as the user
+/momentum virtual    # decide as if the user, and inject that reply
+/momentum dry        # virtual, but logged and never sent
 /momentum max 5      # raise the continuation cap
+/momentum off
 ```
 
 Both modes stop when the agent declares `⏸ BLOCKED` or `✓ DONE`.
+
+### Choosing a mode
+
+| | nudge | virtual |
+|---|---|---|
+| what the agent receives | a fixed "you are allowed to continue" instruction | a message attributed to the user |
+| extra model call | none | one per stop |
+| can put words in your mouth | **no** | yes, mitigated by the never-list and the audit entry |
+| works when the model can't emit JSON | yes | no |
+
+Try `nudge` first. It is deterministic, free, and it never fabricates user
+input — the agent decides what to do next on its own authority. Reach for
+`virtual` when the agent keeps stalling on decisions it will not make by itself:
+there the missing signal is *the user said go*, and only a user message supplies
+it.
 
 ### virtual
 
