@@ -4,7 +4,7 @@
  *   node --experimental-strip-types test/virtual.ts
  */
 
-import { buildSystemPrompt, parseDecision, sanitizeReply } from "../src/virtual.ts";
+import { buildSystemPrompt, neverTerms, parseDecision, sanitizeReply } from "../src/virtual.ts";
 
 interface Case {
 	name: string;
@@ -66,6 +66,25 @@ const cases: Case[] = [
 	{
 		name: "user never-rule is enforced as a literal",
 		run: () => sanitizeReply("按路线 A 做，先改 web 层", ["web 层"]) === "",
+	},
+	{
+		name: "a prohibition rule blocks the action it forbids",
+		run: () => sanitizeReply("那就改数据库迁移吧", ["不许改数据库迁移"]) === "",
+	},
+	{
+		name: "a rule naming an object blocks touching that object",
+		run: () => sanitizeReply("先动 vendor/ 里的文件", ["不要碰 vendor/"]) === "",
+	},
+	{
+		name: "a rule with a comma list splits into separate terms",
+		run: () => neverTerms(["不要碰 vendor/，别删数据"]).includes("vendor/"),
+	},
+	{
+		name: "neverTerms keeps the protected object of a prohibition",
+		run: () => {
+			const terms = neverTerms(["不许改数据库迁移"]);
+			return terms.includes("数据库迁移") && terms.includes("改数据库迁移");
+		},
 	},
 	{
 		name: "ordinary reply survives the guardrails",

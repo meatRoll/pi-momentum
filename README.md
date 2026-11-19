@@ -98,6 +98,8 @@ Scalars (`model`, `maxContinues`) take the deepest value.
 /momentum never rm 不要碰 web 层       # edits the file that declares it
 ```
 
+Rules are matched after stripping the prohibition and the verb, so `不许改数据库迁移` blocks a reply saying `改数据库迁移` — matching the literal would never fire. A comma-separated rule splits into separate terms. Over-blocking is the intended failure direction here: a rejected reply is silence, a missed one is a fabricated instruction.
+
 Built-in patterns cover five default categories (install software, delete/overwrite data, publish/deploy/push, change system config, pay for things) even when every layer is empty.
 
 Config keys, every layer: `never`, `replace`, `model`, `maxContinues`.

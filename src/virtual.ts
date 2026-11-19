@@ -139,6 +139,35 @@ export function parseDecision(raw: string, never: readonly string[] = []): Decis
 }
 
 /**
+ * Turn a user-written rule into the terms a reply must not contain.
+ *
+ * People write rules as prohibitions: "不要碰 vendor/", "不许改数据库迁移". Matching
+ * those literals can never fire — a reply says "改数据库迁移", never "不许改数据库
+ * 迁移". So the prohibition prefix and the leading verb are stripped, yielding the
+ * object the rule protects. Over-blocking is the safe direction: a rejected reply
+ * is silence, a missed one is a fabricated instruction.
+ */
+const PROHIBITION_PREFIX = /^(?:不要|不许|不准|不能|不得|禁止|严禁|别|勿|请勿|don'?t|do not|never|no)\s*/i;
+const LEADING_VERB =
+	/^(?:碰|动|改|修改|调整|变更|删除|删掉|删|清空|清掉|清|覆盖|移除|安装|装|重装|升级|下载|用|使用|加|添加|提交|推送|发布|部署)\s*/i;
+
+export function neverTerms(rules: readonly string[]): string[] {
+	const terms: string[] = [];
+	for (const rule of rules) {
+		for (const part of rule.split(/[,，、;；]/)) {
+			const stripped = part.trim();
+			if (!stripped) continue;
+			const withoutProhibition = stripped.replace(PROHIBITION_PREFIX, "").trim();
+			const withoutVerb = withoutProhibition.replace(LEADING_VERB, "").trim();
+			for (const term of [withoutProhibition, withoutVerb]) {
+				if (term.length >= 2 && !terms.includes(term)) terms.push(term);
+			}
+		}
+	}
+	return terms;
+}
+
+/**
  * Guardrails on the generated reply. Returns "" when the reply must not be sent.
  * Checked here as well as in the prompt: a model that ignores instructions still
  * must not put a forbidden request into the transcript.
@@ -161,9 +190,8 @@ export function sanitizeReply(reply: string, never: readonly string[] = []): str
 	}
 
 	const haystack = text.toLowerCase();
-	for (const item of never) {
-		const needle = item.toLowerCase().trim();
-		if (needle && haystack.includes(needle)) return "";
+	for (const term of neverTerms(never)) {
+		if (haystack.includes(term.toLowerCase())) return "";
 	}
 	return text;
 }
