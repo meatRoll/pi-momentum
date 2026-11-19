@@ -6,7 +6,7 @@ The name is the mechanism: momentum carries a run forward, and an agent only sto
 
 ## Why
 
-Measured on a real 279-turn research session (`01a166c1…`, corpus in `fixtures/corpus`):
+Measured on a real 279-turn research session:
 
 | | |
 |---|---|
@@ -17,7 +17,7 @@ Measured on a real 279-turn research session (`01a166c1…`, corpus in `fixtures
 
 The decisive observation: partway through that session the user typed *"如果不会出现爆盘之类的严重问题，你可以直接执行完，不用询问我"* — and the agent still ended **73 of the next 92 turns** with a question. Prompt-level politeness does not hold. The gate has to sit in the loop.
 
-The measurement session (`01a166c1…`) is not the session that built this project (`01a1f161…`). Their roles and provenance are documented in [`fixtures/README.md`](fixtures/README.md).
+The raw transcript is private and is not in this repository; the figures above come from running `scripts/analyze.ts` over it. See [`fixtures/README.md`](fixtures/README.md) for what ships.
 
 ## Modes
 
@@ -88,12 +88,19 @@ Config file: `<cwd>/.pi/momentum.json`, falling back to `~/.pi/agent/momentum.js
 
 Markers must open a line. A bare mention inside a sentence (*"mark the ticket `blocked`"*) does not count.
 
-## Usage
+## Install
 
 ```bash
-pi -e /Volumes/meatroll_disk/temp/pi-momentum     # try it for one run
-pi install /Volumes/meatroll_disk/temp/pi-momentum # install it
+pi install git:github.com/meatRoll/pi-momentum
 ```
+
+Or try it for one run without installing:
+
+```bash
+pi -e git:github.com/meatRoll/pi-momentum
+```
+
+From a checkout: `pi -e /path/to/pi-momentum`.
 
 ## Developing
 

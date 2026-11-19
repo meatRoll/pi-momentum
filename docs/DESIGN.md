@@ -2,7 +2,7 @@
 
 ## The problem, measured
 
-Evidence: `01a166c1-ccbf-71ae-a652-4acaf29c56b6`, a 279-turn reverse-engineering session (93 MB transcript; only its derived corpus is committed, under `fixtures/corpus/`). The design/build conversation itself is `01a1f161-1eb4-7234-882b-193dd06a2707`, archived in `fixtures/sessions/`. See `fixtures/README.md` for why the two are separate.
+Evidence: a 279-turn reverse-engineering session, scored with the tooling in `scripts/`. The transcript itself is private and is not in this repository. `fixtures/corpus/sample.json` is a synthetic corpus that exercises the same code path.
 
 A **turn end** is the last assistant text message before the next user message — the exact moment where an agent run goes idle and the user has to type something.
 

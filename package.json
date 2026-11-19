@@ -1,14 +1,14 @@
 {
   "name": "pi-momentum",
-  "version": "0.1.0",
-  "private": true,
+  "version": "1.0.0",
   "type": "module",
   "description": "Keep Pi moving: continue whenever the agent already has a recommendation, stop only when it genuinely cannot decide.",
   "keywords": [
     "pi-package",
     "pi-extension",
     "momentum",
-    "autonomy"
+    "autonomy",
+    "coding-agent"
   ],
   "pi": {
     "extensions": [
@@ -21,5 +21,15 @@
     "test": "node --experimental-strip-types test/virtual.ts && node --experimental-strip-types test/smoke.ts && node --experimental-strip-types scripts/analyze.ts --selftest",
     "build": "echo 'loaded via jiti; no build step'",
     "check": "node --experimental-strip-types scripts/analyze.ts --selftest"
+  },
+  "license": "MIT",
+  "author": "meatRoll",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/meatRoll/pi-momentum.git"
+  },
+  "homepage": "https://github.com/meatRoll/pi-momentum#readme",
+  "bugs": {
+    "url": "https://github.com/meatRoll/pi-momentum/issues"
   }
 }

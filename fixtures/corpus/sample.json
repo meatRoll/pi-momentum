@@ -1,0 +1,79 @@
+{
+  "source": "synthetic sample",
+  "sessionId": "sample-0000",
+  "cwd": "/example/project",
+  "generatedAt": "2026-01-01T00:00:00.000Z",
+  "turnCount": 10,
+  "turns": [
+    {
+      "index": 0,
+      "entry": 12,
+      "finalText": "下一步我建议先把缓存层接上，再回头处理边界条件。\n\n要我继续吗？",
+      "userReply": "继续",
+      "ack": true
+    },
+    {
+      "index": 1,
+      "entry": 24,
+      "finalText": "单元测试 42/42 通过，工作区干净。",
+      "userReply": "继续",
+      "ack": true
+    },
+    {
+      "index": 2,
+      "entry": 31,
+      "finalText": "api/ 层还没动。要我接着改吗？",
+      "userReply": "可以",
+      "ack": true
+    },
+    {
+      "index": 3,
+      "entry": 45,
+      "finalText": "⏸ BLOCKED\n卡点：要不要把 vendor/ 里的补丁打进去\n候选：A 打补丁 / B 保持上游实现\n推荐：A —— 但打补丁会覆盖上游文件，需要你确认。",
+      "userReply": "先别打补丁，把理由写进文档",
+      "ack": false
+    },
+    {
+      "index": 4,
+      "entry": 58,
+      "finalText": "✓ DONE\n文档补完了，42 个测试全绿。",
+      "userReply": "好的",
+      "ack": true
+    },
+    {
+      "index": 5,
+      "entry": 66,
+      "finalText": "有两条路：A 改配置绕过，B 重构调用链。你选哪条？",
+      "userReply": "按你推荐的来",
+      "ack": true
+    },
+    {
+      "index": 6,
+      "entry": 79,
+      "finalText": "临时目录已经清了，磁盘剩 12GB。",
+      "userReply": "继续",
+      "ack": true
+    },
+    {
+      "index": 7,
+      "entry": 88,
+      "finalText": "逻辑改完了。要我把这一块补上文档吗？",
+      "userReply": "不用了，先别写文档，把缺的测试补上",
+      "ack": false
+    },
+    {
+      "index": 8,
+      "entry": 95,
+      "finalText": "计数器的重置点挪到了 input 事件上。",
+      "userReply": "嗯",
+      "ack": true
+    },
+    {
+      "index": 9,
+      "entry": 104,
+      "finalText": "重构完成，没有遗留项。要我提交吗？",
+      "userReply": "那就提交吧",
+      "ack": true
+    }
+  ]
+}

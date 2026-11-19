@@ -1,40 +1,37 @@
 # Fixtures
 
-Two sessions are involved here, and they are not interchangeable. Mixing them up
-is easy because both were once referenced as "this session".
+## What ships
 
-| session | role | kept as |
-|---|---|---|
-| `01a1f161-1eb4-7234-882b-193dd06a2707` | the session that designed and built pi-momentum (`cwd=/Volumes/meatroll_disk/temp`) | `sessions/01a1f161….jsonl` — the archived transcript (committed) |
-| `01a166c1-ccbf-71ae-a652-4acaf29c56b6` | the 279-turn reverse-engineering session (`cwd=/Volumes/meatroll_disk/temp/guoguoreserve`) that supplies the measurements in the README and `docs/DESIGN.md` | `corpus/01a166c1….json` (committed); the 89 MB raw transcript stays in `~/.pi`, not in this project |
+`corpus/sample.json` — a synthetic corpus, ten turn endings in the shape
+`scripts/extract-corpus.ts` produces. It exists so `npm run analyze` works on a
+fresh clone and so the format is documented. It contains no real session data.
 
-The design session was pointed at the research session to study its turn endings
-(`01a1f161` entry #19). That is why the evidence comes from `01a166c1`, while the
-session being archived as the project's origin is `01a1f161`.
+## What stays local
 
-The live copy of `01a1f161` now lives in Pi's session store for this project
-(`~/.pi/agent/sessions/--Volumes-meatroll_disk-temp-pi-momentum--/`), with its
-header `cwd` set to the project. The committed transcript keeps the original
-header (`cwd=/Volumes/meatroll_disk/temp`) as the historical record.
-
-## Why the origin session has no corpus
-
-`scripts/extract-corpus.ts` counts a turn end only when an assistant **text**
-message is followed by a user message. `01a1f161` has three user messages: two
-are followed by assistant text, and the last assistant message has no reply
-(the session ends there). That yields two turns — enough to archive the
-conversation, not enough to score a gate. So it is kept as a transcript only.
-
-## Rebuilding
-
-Raw evidence transcripts are gitignored (`sessions/*.jsonl`); the small origin
-transcript is tracked via an exception in `.gitignore`. The committed corpus is
-the reproducible artifact:
+Real transcripts are never committed:
 
 ```bash
-npm run corpus -- ~/.pi/agent/sessions/--Volumes-meatroll_disk-temp-guoguoreserve--/2026-10-23T03-15-39-327Z_01a166c1-ccbf-71ae-a652-4acaf29c56b6.jsonl
-npm run analyze
+npm run corpus -- <session.jsonl>   # writes fixtures/corpus/<session-id>.json
+npm run analyze                     # scores the newest corpus
 ```
 
-`corpus/01a166c1….json` records the exact path it was derived from. The 89 MB
-transcript is not copied into the project; the corpus is the part that ships.
+`fixtures/sessions/*` and any corpus other than `sample.json` are gitignored.
+A session transcript can contain hostnames, device identifiers, request headers
+and the full text of private conversations, so it belongs in `~/.pi`, not in a
+repository.
+
+## Shipped numbers
+
+The measurements quoted in `README.md` and `docs/DESIGN.md` come from a private
+279-turn session, scored with the same code that ships here:
+
+| metric | value |
+|---|---|
+| turns | 279 |
+| turn ends with a question to the user | 148 (53%) |
+| of those, reply was ≤12 characters | 108 (73%) |
+| turns the gate would have continued | 279 (100%) |
+
+The raw transcript and its derived corpus are not part of this repository. The
+aggregate figures are, because the tooling that produces them is testable
+without the data.
