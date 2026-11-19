@@ -17,6 +17,7 @@ import { addNever, loadConfig, type MomentumConfig, originLabel, removeNever } f
 import { analyzeTurnEnd, BLOCK_MARKER, continuationPrompt, DONE_MARKER } from "./detect.ts";
 import { RULES, SECTION_TAG } from "./rules.ts";
 import { buildSystemPrompt, DEFAULT_NEVER, type Decision, parseDecision } from "./virtual.ts";
+import { VERSION } from "./version.ts";
 
 const CONTINUE_CUSTOM_TYPE = "pi-momentum/continue";
 /** Every decision, dry or sent. Renders in the transcript, never enters LLM context. */
@@ -313,7 +314,7 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 			refreshStatus(state, ctx);
 			const builtin = `${DEFAULT_NEVER.length} built-in`;
 			ctx.ui.notify(
-				`momentum: ${state.mode}${state.dryRun ? " (dry-run, nothing is sent)" : ""} · max ${state.maxContinues} · ` +
+				`momentum v${VERSION}: ${state.mode}${state.dryRun ? " (dry-run, nothing is sent)" : ""} · max ${state.maxContinues} · ` +
 					(state.config.never.length === 0
 						? `no never-rules set (${builtin} still active)`
 						: `${state.config.never.length} never-rules + ${builtin}`),
@@ -434,6 +435,10 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 
 		if (state.dryRun) {
 			pi.appendEntry(DECISION_ENTRY_TYPE, { ...entry, dry: true, sent: false } satisfies DecisionEntry);
+			// The entry is the durable record; this is so a decision is never
+			// invisible just because the transcript scrolled or the renderer is
+			// unavailable.
+			ctx.ui.notify(`momentum[dry] would send "${decision.reply}"`, "info");
 			return;
 		}
 

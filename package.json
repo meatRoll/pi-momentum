@@ -1,6 +1,6 @@
 {
   "name": "pi-momentum",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "type": "module",
   "description": "Keep Pi moving: continue whenever the agent already has a recommendation, stop only when it genuinely cannot decide.",
   "keywords": [
@@ -18,7 +18,7 @@
   "scripts": {
     "corpus": "node --experimental-strip-types scripts/extract-corpus.ts",
     "analyze": "node --experimental-strip-types scripts/analyze.ts",
-    "test": "node --experimental-strip-types test/virtual.ts && node --experimental-strip-types test/config.ts && node --experimental-strip-types test/smoke.ts && node --experimental-strip-types scripts/analyze.ts --selftest",
+    "test": "node --experimental-strip-types test/version.ts && node --experimental-strip-types test/virtual.ts && node --experimental-strip-types test/config.ts && node --experimental-strip-types test/smoke.ts && node --experimental-strip-types scripts/analyze.ts --selftest",
     "build": "echo 'loaded via jiti; no build step'",
     "check": "node --experimental-strip-types scripts/analyze.ts --selftest"
   },
