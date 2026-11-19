@@ -193,6 +193,13 @@ const CASES: Case[] = [
 		expect: { sent: undefined, calls: 1, audited: false, logged: true },
 	},
 	{
+		name: "test with no argument reads the last assistant message",
+		mode: "virtual",
+		text: "要我接着做这个吗？",
+		probe: "",
+		expect: { sent: undefined, calls: 1, notified: "last assistant message" },
+	},
+	{
 		name: "test command probes the decision without sending anything",
 		mode: "virtual",
 		probe: "要我接着做这个吗？",
@@ -220,8 +227,8 @@ for (const testCase of CASES) {
 	if (testCase.dryRun) await momentum("dry", ctx);
 
 	let continued: boolean | undefined;
-	if (testCase.probe) {
-		await momentum(`test ${testCase.probe}`, ctx);
+	if (testCase.probe !== undefined) {
+		await momentum(`test ${testCase.probe}`.trim(), ctx);
 	} else if (testCase.mode === "nudge") {
 		const result = (await settle(settleEvent(testCase.text), ctx)) as { continue?: boolean } | undefined;
 		continued = result?.continue === true;

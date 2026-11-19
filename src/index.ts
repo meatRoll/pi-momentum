@@ -236,6 +236,10 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 				case "dry":
 					state.mode = state.mode === "off" ? "virtual" : state.mode;
 					state.dryRun = true;
+					ctx.ui.notify(
+						"momentum: dry-run armed — decisions are logged the next time the agent stops. Use /momentum test for an immediate probe.",
+						"info",
+					);
 					break;
 				case "send":
 					state.dryRun = false;
@@ -250,19 +254,32 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 					break;
 				}
 				case "test": {
-					const text = rest.join(" ").trim();
-					if (!text) {
-						ctx.ui.notify("Usage: /momentum test <assistant text>", "warning");
+					// No argument: simulate the reply for the conversation as it stands.
+					// This is the only way to see a decision without waiting for a stop.
+					const explicit = rest.join(" ").trim();
+					const text = explicit || lastAssistantTextFromBranch(ctx);
+					if (!text.trim()) {
+						ctx.ui.notify("momentum: no assistant message to test yet", "warning");
+						return;
+					}
+					const source = explicit ? "given text" : "last assistant message";
+					const quick = analyzeTurnEnd(text);
+					if (quick.verdict !== "continue") {
+						ctx.ui.notify(
+							`momentum test (${source})\n  skipped: agent declared ${quick.verdict.toUpperCase()} — no model call\n  in: ${preview(text, 160)}`,
+							"info",
+						);
 						return;
 					}
 					const { decision, raw } = await askVirtualUser(ctx, text);
 					ctx.ui.notify(
 						[
-							"momentum test",
+							`momentum test (${source})`,
 							`  action: ${decision.action}`,
 							`  reply:  ${decision.reply ? `"${decision.reply}"` : "(none)"}`,
 							`  reason: ${decision.reason || "(none)"}`,
 							`  would send: ${decision.action === "continue" ? "yes" : "no"}`,
+							`  in: ${preview(text, 160)}`,
 							`  raw: ${raw.slice(0, 400).replace(/\s+/g, " ")}`,
 						].join("\n"),
 						"info",

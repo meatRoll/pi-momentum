@@ -51,9 +51,13 @@ Expect both rules, the second labelled with the deeper layer. Then from
 
 ## 3. Decision cases
 
-`/momentum test <text>` runs the virtual-user call on arbitrary text and prints
-the decision **without sending anything**. This is the cheapest way to probe the
-prompt, and it needs no session state.
+`/momentum test` runs the virtual-user call and prints the decision **without
+sending anything**. With no argument it reads the last assistant message, so you
+can probe the conversation as it stands without waiting for a stop; with an
+argument it reads that text instead.
+
+Note that `/momentum dry` is a mode switch, not an action: it arms logging for
+the *next* time the agent stops. `/momentum test` is the immediate probe.
 
 | input | expect |
 |---|---|

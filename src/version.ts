@@ -8,4 +8,4 @@
  * through a transform, and file-relative reads are the fragile part of that.
  * test/version.ts fails if this drifts from package.json.
  */
-export const VERSION = "1.5.0";
+export const VERSION = "1.5.1";
