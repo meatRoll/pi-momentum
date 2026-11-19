@@ -49,12 +49,13 @@ Runs on `agent_before_settle`, the last actionable boundary before a run goes id
 
 The virtual user must not authorize things you never want. It is a hard prefix in the prompt *and* a regex guardrail applied to the generated reply.
 
-Rules are scoped **per repository**:
+Rules are scoped by **directory path**. Every ancestor of the working directory may own a `.pi/momentum.json`, and they fold shallow to deep:
 
-| scope | file | applies to |
-|---|---|---|
-| `repo` | `<git-root>/.pi/momentum.json` | this repository only |
-| `global` | `~/.pi/agent/momentum.json` | every project |
+```
+~/.pi/agent/momentum.json                  personal, applies everywhere
+<project>/.pi/momentum.json                the whole project
+<project>/packages/foo/.pi/momentum.json   just this package
+```
 
 ```json
 {
@@ -63,18 +64,22 @@ Rules are scoped **per repository**:
 }
 ```
 
-The repo file is resolved from the **git root**, not the working directory, so starting Pi in `packages/foo/src` still finds the rules for the repository. Lists merge by default — a repo adding its own rules should not silently drop `别删数据`. Set `"replace": true` in the repo file when a repository genuinely needs a clean slate.
+There is no `.git` sniffing: a layer is simply a directory that has the file. That is what makes a monorepo work — `packages/a` and `packages/b` are separate scopes, not one repository-wide blob.
+
+Lists merge shallow to deep, so a package adding its own rules never silently drops `别删数据` from above. A layer that sets `"replace": true` discards every shallower list; everything below it still accumulates. Duplicates stay where they first appeared but belong to the deepest layer that declares them.
+
+Scalars (`model`, `maxContinues`) take the deepest value.
 
 ```bash
-/momentum never list                  # shows [repo] / [global] per rule
-/momentum never add 不要碰 web 层     # writes the repo file
-/momentum never add --global 别删库    # writes the user file
-/momentum never rm 不要碰 web 层
+/momentum never list                  # shows [global] / [dir] per rule
+/momentum never add 不要碰 web 层     # deepest existing layer, else cwd
+/momentum never add --global 别删库    # the user file
+/momentum never rm 不要碰 web 层       # edits the file that declares it
 ```
 
-Built-in patterns cover five default categories (install software, delete/overwrite data, publish/deploy/push, change system config, pay for things) even when both lists are empty.
+Built-in patterns cover five default categories (install software, delete/overwrite data, publish/deploy/push, change system config, pay for things) even when every layer is empty.
 
-Config keys, both scopes: `never`, `replace`, `model`, `maxContinues`.
+Config keys, every layer: `never`, `replace`, `model`, `maxContinues`.
 
 ## Safety
 

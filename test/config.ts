@@ -1,34 +1,51 @@
 /**
- * Config scoping cases: repo root discovery, merge, replace, add/remove.
+ * Config layer cases: path discovery, folding, replace, add/remove.
  *
  *   node --experimental-strip-types test/config.ts
  *
- * Runs against a throwaway HOME and a throwaway git repo, so nothing touches the
- * real ~/.pi/agent.
+ * Runs against a throwaway HOME and throwaway directories, so nothing touches
+ * the real ~/.pi/agent. No .git is created anywhere: layers are pure paths.
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addNever, findRepoRoot, globalConfigPath, loadConfig, removeNever, repoConfigPath } from "../src/config.ts";
+import {
+	addNever,
+	findLocalLayers,
+	globalConfigPath,
+	layerConfigPath,
+	loadConfig,
+	originLabel,
+	removeNever,
+} from "../src/config.ts";
 
-const root = mkdtempSync(join(tmpdir(), "pi-momentum-config-"));
+const root = mkdtempSync(join(tmpdir(), "pi-momentum-layers-"));
 process.env.HOME = join(root, "home");
 
-const repo = join(root, "repo");
-const nested = join(repo, "packages", "deep", "src");
-const outside = join(root, "elsewhere");
-for (const dir of [nested, outside, join(root, "home", ".pi", "agent")]) mkdirSync(dir, { recursive: true });
-mkdirSync(join(repo, ".git"));
-mkdirSync(join(repo, ".pi"), { recursive: true });
+const project = join(root, "project");
+const pkg = join(project, "packages", "foo");
+const nested = join(pkg, "src");
+for (const dir of [nested, join(root, "home", ".pi", "agent")]) mkdirSync(dir, { recursive: true });
 
 function writeJson(path: string, value: unknown): void {
+	mkdirSync(join(path, "..", ".."), { recursive: true });
 	writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function writeLayer(dir: string, value: unknown): void {
+	mkdirSync(join(dir, ".pi"), { recursive: true });
+	writeJson(layerConfigPath(dir), value);
+}
+
+function readLayer(dir: string): { never?: string[]; model?: string } {
+	return JSON.parse(readFileSync(layerConfigPath(dir), "utf8")) as { never?: string[]; model?: string };
 }
 
 function reset(): void {
 	writeJson(globalConfigPath(), { never: [] });
-	writeJson(repoConfigPath(repo), { never: [] });
+	writeLayer(project, { never: [] });
+	writeLayer(pkg, { never: [] });
 }
 
 interface Case {
@@ -38,105 +55,153 @@ interface Case {
 
 const cases: Case[] = [
 	{
-		name: "repo root is found from a nested directory",
-		run: () => findRepoRoot(nested) === repo,
-	},
-	{
-		name: "no repo root outside a repository",
-		run: () => findRepoRoot(outside) === undefined,
-	},
-	{
-		name: "global and repo lists merge, repo after global",
+		name: "a layer is a directory with .pi/momentum.json, no .git needed",
 		run: () => {
 			reset();
-			writeJson(globalConfigPath(), { never: ["别删数据"] });
-			writeJson(repoConfigPath(repo), { never: ["别碰 vendor/"] });
+			const dirs = findLocalLayers(nested).map((layer) => layer.root);
+			return dirs.includes(project) && dirs.includes(pkg);
+		},
+	},
+	{
+		name: "layers are ordered shallowest first",
+		run: () => {
+			reset();
+			const dirs = findLocalLayers(nested).map((layer) => layer.root);
+			return dirs.indexOf(project) < dirs.indexOf(pkg);
+		},
+	},
+	{
+		name: "deep and shallow lists merge",
+		run: () => {
+			reset();
+			writeLayer(project, { never: ["root-rule"] });
+			writeLayer(pkg, { never: ["pkg-rule"] });
 			const config = loadConfig(nested);
-			return JSON.stringify(config.never) === JSON.stringify(["别删数据", "别碰 vendor/"]);
+			return JSON.stringify(config.never) === JSON.stringify(["root-rule", "pkg-rule"]);
 		},
 	},
 	{
-		name: "each rule reports its scope",
+		name: "global list sits below every local layer",
 		run: () => {
 			reset();
-			writeJson(globalConfigPath(), { never: ["G"] });
-			writeJson(repoConfigPath(repo), { never: ["R"] });
+			writeJson(globalConfigPath(), { never: ["global-rule"] });
+			writeLayer(pkg, { never: ["pkg-rule"] });
 			const config = loadConfig(nested);
-			return config.rules[0]?.scope === "global" && config.rules[1]?.scope === "repo";
+			return JSON.stringify(config.never) === JSON.stringify(["global-rule", "pkg-rule"]);
 		},
 	},
 	{
-		name: "replace: true shadows the global list",
+		name: "originLabel names the layer directory",
 		run: () => {
 			reset();
-			writeJson(globalConfigPath(), { never: ["G"] });
-			writeJson(repoConfigPath(repo), { never: ["R"], replace: true });
+			writeJson(globalConfigPath(), { never: ["g"] });
+			writeLayer(pkg, { never: ["p"] });
 			const config = loadConfig(nested);
-			return JSON.stringify(config.never) === JSON.stringify(["R"]) && config.replace === true;
+			const labels = config.rules.map((rule) => originLabel(rule, nested));
+			return labels[0] === "global" && labels[1] === "…/foo";
 		},
 	},
 	{
-		name: "duplicates across scopes collapse",
+		name: "deeper scalar wins",
 		run: () => {
 			reset();
-			writeJson(globalConfigPath(), { never: ["同一个"] });
-			writeJson(repoConfigPath(repo), { never: ["同一个"] });
-			return loadConfig(nested).never.length === 1;
+			writeJson(globalConfigPath(), { model: "p/global" });
+			writeLayer(project, { model: "p/root" });
+			writeLayer(pkg, { model: "p/deep" });
+			return loadConfig(nested).model === "p/deep";
 		},
 	},
 	{
-		name: "repo rules are ignored outside the repository",
+		name: "a deep replace:true drops the shallower lists",
 		run: () => {
 			reset();
-			writeJson(globalConfigPath(), { never: ["G"] });
-			writeJson(repoConfigPath(repo), { never: ["R"] });
-			return JSON.stringify(loadConfig(outside).never) === JSON.stringify(["G"]);
-		},
-	},
-	{
-		name: "addNever appends to the repo file and keeps other keys",
-		run: () => {
-			reset();
-			writeJson(repoConfigPath(repo), { never: ["A"], model: "p/m" });
+			writeJson(globalConfigPath(), { never: ["g"] });
+			writeLayer(project, { never: ["root"] });
+			writeLayer(pkg, { never: ["pkg"], replace: true });
 			const config = loadConfig(nested);
-			addNever(config, "B", "repo");
-			const written = JSON.parse(readFileSync(repoConfigPath(repo), "utf8")) as {
-				never: string[];
-				model?: string;
-			};
-			return JSON.stringify(written.never) === JSON.stringify(["A", "B"]) && written.model === "p/m";
+			return JSON.stringify(config.never) === JSON.stringify(["pkg"]) && config.replace === true;
 		},
 	},
 	{
-		name: "addNever --global writes the user file, not the repo file",
+		name: "duplicates are owned by the deeper layer, position kept",
 		run: () => {
 			reset();
+			writeLayer(project, { never: ["同一个", "root-only"] });
+			writeLayer(pkg, { never: ["同一个"] });
 			const config = loadConfig(nested);
-			addNever(config, "personal", "global");
+			return JSON.stringify(config.never) === JSON.stringify(["同一个", "root-only"]) &&
+				config.rules[0]?.file === layerConfigPath(pkg);
+		},
+	},
+	{
+		name: "a directory outside the chain contributes nothing",
+		run: () => {
+			reset();
+			const other = join(root, "other");
+			writeLayer(other, { never: ["other-rule"] });
+			return !loadConfig(nested).never.includes("other-rule");
+		},
+	},
+	{
+		name: "addNever with no layer yet writes the working directory",
+		run: () => {
+			reset();
+			const lonely = join(root, "lonely");
+			mkdirSync(lonely, { recursive: true });
+			const path = addNever(loadConfig(lonely), lonely, "new-rule", "local");
+			return path === layerConfigPath(lonely) && readLayer(lonely).never?.includes("new-rule") === true;
+		},
+	},
+	{
+		name: "addNever targets the deepest existing layer",
+		run: () => {
+			reset();
+			const path = addNever(loadConfig(nested), nested, "pkg-rule", "local");
+			return path === layerConfigPath(pkg) && readLayer(pkg).never?.includes("pkg-rule") === true;
+		},
+	},
+	{
+		name: "addNever --global never touches a local layer",
+		run: () => {
+			reset();
+			const path = addNever(loadConfig(nested), nested, "personal", "global");
 			const global = JSON.parse(readFileSync(globalConfigPath(), "utf8")) as { never: string[] };
-			const repoFile = JSON.parse(readFileSync(repoConfigPath(repo), "utf8")) as { never: string[] };
 			return (
-				JSON.stringify(global.never) === JSON.stringify(["personal"]) &&
-				JSON.stringify(repoFile.never) === JSON.stringify([])
+				path === globalConfigPath() &&
+				global.never.includes("personal") &&
+				(readLayer(pkg).never ?? []).includes("personal") === false
 			);
 		},
 	},
 	{
-		name: "removeNever removes only the named rule",
+		name: "addNever preserves keys it does not own",
 		run: () => {
 			reset();
-			writeJson(repoConfigPath(repo), { never: ["A", "B", "C"] });
-			removeNever(loadConfig(nested), "B", "repo");
-			const written = JSON.parse(readFileSync(repoConfigPath(repo), "utf8")) as { never: string[] };
-			return JSON.stringify(written.never) === JSON.stringify(["A", "C"]);
+			writeLayer(pkg, { never: ["a"], model: "p/m" });
+			addNever(loadConfig(nested), nested, "b", "local");
+			const written = readLayer(pkg) as { never?: string[]; model?: string };
+			return JSON.stringify(written.never) === JSON.stringify(["a", "b"]) && written.model === "p/m";
 		},
 	},
 	{
-		name: "a broken config file does not throw",
+		name: "removeNever edits the file that declares the rule",
 		run: () => {
 			reset();
-			writeFileSync(repoConfigPath(repo), "{ not json");
-			return loadConfig(nested).never.length === 0;
+			writeLayer(project, { never: ["root-rule"] });
+			writeLayer(pkg, { never: ["pkg-rule"] });
+			const path = removeNever(loadConfig(nested), "root-rule");
+			return path === layerConfigPath(project) &&
+				(readLayer(project).never ?? []).length === 0 &&
+				JSON.stringify(readLayer(pkg).never) === JSON.stringify(["pkg-rule"]);
+		},
+	},
+	{
+		name: "a broken layer file does not throw",
+		run: () => {
+			reset();
+			mkdirSync(join(pkg, ".pi"), { recursive: true });
+			writeFileSync(layerConfigPath(pkg), "{ not json");
+			return Array.isArray(loadConfig(nested).never);
 		},
 	},
 ];
