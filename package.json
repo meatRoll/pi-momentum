@@ -4,14 +4,21 @@
   "private": true,
   "type": "module",
   "description": "Keep Pi moving: continue whenever the agent already has a recommendation, stop only when it genuinely cannot decide.",
-  "keywords": ["pi-package", "pi-extension", "momentum", "autonomy"],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "momentum",
+    "autonomy"
+  ],
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
   "scripts": {
     "corpus": "node --experimental-strip-types scripts/extract-corpus.ts",
     "analyze": "node --experimental-strip-types scripts/analyze.ts",
-    "test": "node --experimental-strip-types test/smoke.ts && node --experimental-strip-types scripts/analyze.ts --selftest",
+    "test": "node --experimental-strip-types test/virtual.ts && node --experimental-strip-types test/smoke.ts && node --experimental-strip-types scripts/analyze.ts --selftest",
     "build": "echo 'loaded via jiti; no build step'",
     "check": "node --experimental-strip-types scripts/analyze.ts --selftest"
   }

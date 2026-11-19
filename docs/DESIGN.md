@@ -121,7 +121,25 @@ So the detector defaults to continue. The cap (`maxContinues`, default 3) bounds
 - the analysis verdict is `continue`
 - the last assistant message exists and is non-empty
 
-The counter resets on `before_agent_start` with `messageType === "user"` — i.e. a real human prompt, not our own injected message (which arrives as `messageType === "custom"`).
+The counter resets on the `input` event with `source === "interactive"` — a real human prompt. Our own `sendUserMessage` arrives with `source === "extension"`, so it does not clear the cap and cannot loop forever.
+
+## Virtual-user mode
+
+`nudge` tells the agent to keep going. `virtual` **speaks for the user**, which is a different risk, so three things flip:
+
+| | nudge | virtual |
+|---|---|---|
+| hook | `agent_before_settle` + `continue: true` | `agent_settled` + `pi.sendUserMessage()` |
+| message identity | `custom_message` (extension-authored) | real user message |
+| default | continue | **stop** |
+| context seen | the run | **only the last assistant message** |
+| cost | free | one one-shot model call |
+
+`agent_settled` is forced by the requirement that the reply look like the user typed it: `sendUserMessage` needs an idle session. The upside is that the decision is no longer made inside the run that is asking the question — which is also why the model gets only the last message, not the transcript. An intent reader with one message of context cannot start pursuing its own goals.
+
+The default flips to `stop` for the same reason. In nudge mode a wrong "continue" costs a round; here it writes a request into the transcript that the user never made. Everything unusable — bad JSON, a rejected reply, a failed call — degrades to silence.
+
+The never-list is a user-authored prefix plus a regex backstop, because substring matching does not survive paraphrase: `安装新软件或依赖` does not match `装一下新软件`. Built-in patterns cover the five categories; user entries are matched literally.
 
 ## Open questions
 

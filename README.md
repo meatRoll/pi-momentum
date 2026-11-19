@@ -19,25 +19,58 @@ The decisive observation: partway through that session the user typed *"如果�
 
 The measurement session (`01a166c1…`) is not the session that built this project (`01a1f161…`). Their roles and provenance are documented in [`fixtures/README.md`](fixtures/README.md).
 
-## How it works
-
-Two pieces:
-
-1. **The contract** (`src/rules.ts`) is injected into the system prompt while the extension is active. It lists the four situations where stopping is legal and the five where it is not.
-2. **The gate** (`src/index.ts`) runs on `agent_before_settle` — Pi's final actionable boundary before a run is allowed to go idle. If the last assistant message carried neither marker, the extension appends a nudge and asks for one more provider request instead of handing control back.
-
-Safety valve: at most `max` (default 3) automatic continuations per user turn. A run that spins without progress hits the cap and returns control.
-
-Dry-run is the default. Nothing is injected until you opt in:
+## Modes
 
 ```
-/momentum enforce     # turn the gate on
-/momentum dry         # back to detect-only
-/momentum max 5       # raise the cap
-/momentum on|off      # master switch
+/momentum virtual    # read the last message, reply in the user's voice when it is waiting
+/momentum nudge      # fixed instruction telling the agent to keep going
+/momentum off
+/momentum dry        # decide, print what it would do, send nothing
+/momentum max 5      # raise the continuation cap
 ```
 
-The footer shows `⚡ momentum enforce 1/3`.
+Both modes stop when the agent declares `⏸ BLOCKED` or `✓ DONE`.
+
+### virtual
+
+When a run goes idle, one isolated one-shot model call reads **only the agent's last message** and decides whether that text is waiting on the user. If it is, the same call produces the one-line reply a user would send, and the extension injects it as a real user message.
+
+The prompt is an intent reader, not a persona: understand what the message is asking for, then say the thing that keeps it moving. When the message offers several options, it takes the one the agent itself recommended; with no recommendation it takes the smallest, most reversible step. Otherwise it stays silent.
+
+Costs one cheap model call per stop. Pin a model with `"model": "provider/id"` in the config file; otherwise the active model is used.
+
+Every injected reply also writes a `pi-momentum/virtual-reply` entry, so a transcript can always tell a human from the extension.
+
+### nudge
+
+Runs on `agent_before_settle`, the last actionable boundary before a run goes idle. If the last assistant message carried neither marker, it appends a fixed instruction and asks for one more provider request. No extra model call.
+
+### Never-list
+
+The virtual user must not authorize things you never want. It is a hard prefix in the prompt *and* a regex guardrail applied to the generated reply:
+
+```json
+{
+  "never": ["安装新软件", "删库", "推送到远程"]
+}
+```
+
+```
+/momentum never list
+/momentum never add 不要碰 web 层
+/momentum never rm 不要碰 web 层
+```
+
+Built-in patterns cover five default categories (install software, delete/overwrite data, publish/deploy/push, change system config, pay for things) even when the list is empty.
+
+Config file: `<cwd>/.pi/momentum.json`, falling back to `~/.pi/agent/momentum.json`. Edits are written to the project file.
+
+## Safety
+
+- **Cap.** At most `max` (default 3) continuations per user turn. The counter resets only on a human prompt.
+- **`stop` is the default** in virtual mode: a malformed or uninferable answer sends nothing.
+- **Aborted runs never resume** (`event.aborted`).
+- **Audit entry** per injected reply.
 
 ## Markers
 
@@ -82,10 +115,13 @@ npm run analyze -- --session <session.jsonl>
 
 ```
 src/detect.ts    turn-end analysis, marker parsing (pure, no Pi imports)
+src/virtual.ts   virtual-user prompt, decision parsing, reply guardrails (pure)
+src/config.ts    never-list + model settings, global and project scopes
 src/rules.ts     system prompt contract
-src/index.ts     the extension: inject, gate, cap, commands
+src/index.ts     the extension: modes, gate, cap, commands
 scripts/         corpus extraction + offline scoring
 test/smoke.ts    fake ExtensionAPI harness, no Pi boot required
+test/virtual.ts  decision parsing and guardrail cases
 fixtures/        origin session transcript + derived evidence corpus
 docs/DESIGN.md   evidence, rule derivation, open questions
 ```

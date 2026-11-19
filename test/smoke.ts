@@ -3,71 +3,104 @@
  *
  *   npm test
  *
- * Builds a fake ExtensionAPI, captures the handlers the extension registers,
- * and drives the turn-end gate through the cases that matter.
+ * Builds a fake ExtensionAPI + ExtensionContext, captures what the extension
+ * registers, and drives both modes through the cases that matter.
  */
 
-import momentumExtension from "../src/index.ts";
 import { analyzeTurnEnd } from "../src/detect.ts";
+import momentumExtension from "../src/index.ts";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
 interface Harness {
 	handlers: Map<string, Handler>;
+	commands: Map<string, Handler>;
+	sent: string[];
+	entries: Array<{ type: string; data: unknown }>;
 	notifications: string[];
 	statuses: Array<string | undefined>;
-	commands: Map<string, Handler>;
-	flags: Set<string>;
+	completeCalls: number;
 	ctx: never;
 }
 
-function createHarness(): Harness {
+interface HarnessOptions {
+	/** Raw text the virtual-user model call returns. */
+	modelReply?: string;
+	/** Assistant text on the session branch. */
+	lastAssistant?: string;
+}
+
+const CONTINUE_JSON = '{"action":"continue","reply":"继续","reason":"它在等确认"}';
+const STOP_JSON = '{"action":"stop","reply":"","reason":"已经宣布完成"}';
+
+function createHarness(options: HarnessOptions = {}): Harness {
 	const handlers = new Map<string, Handler>();
+	const commands = new Map<string, Handler>();
+	const sent: string[] = [];
+	const entries: Array<{ type: string; data: unknown }> = [];
 	const notifications: string[] = [];
 	const statuses: Array<string | undefined> = [];
-	const commands = new Map<string, Handler>();
-	const flags = new Set<string>();
+	const state = { completeCalls: 0 };
 
-	const pi = {
-		on: (event: string, handler: Handler) => {
-			handlers.set(event, handler);
+	const ctx = {
+		cwd: process.cwd(),
+		model: { id: "fake-model", provider: "fake" },
+		modelRegistry: {
+			find: () => undefined,
+			complete: async () => {
+				state.completeCalls += 1;
+				return {
+					content: [{ type: "text", text: options.modelReply ?? CONTINUE_JSON }],
+					stopReason: "stop",
+				};
+			},
 		},
-		registerCommand: (name: string, options: { handler: Handler }) => {
-			commands.set(name, options.handler);
+		sessionManager: {
+			getBranch: () => [
+				{
+					type: "message",
+					message: { role: "assistant", content: [{ type: "text", text: options.lastAssistant ?? "" }] },
+				},
+			],
 		},
-		registerFlag: (name: string) => {
-			flags.add(name);
+		isIdle: () => true,
+		ui: {
+			notify: (message: string) => notifications.push(message),
+			setStatus: (_key: string, text: string | undefined) => statuses.push(text),
 		},
 	};
 
+	const pi = {
+		on: (event: string, handler: Handler) => handlers.set(event, handler),
+		registerCommand: (name: string, options_: { handler: Handler }) => commands.set(name, options_.handler),
+		registerFlag: () => {},
+		appendEntry: (type: string, data: unknown) => entries.push({ type, data }),
+		sendUserMessage: (content: string) => sent.push(content),
+	};
+
 	momentumExtension(pi as never);
-
-	const ctx = {
-		ui: {
-			notify: (message: string) => {
-				notifications.push(message);
-			},
-			setStatus: (_key: string, text: string | undefined) => {
-				statuses.push(text);
-			},
+	return {
+		handlers,
+		commands,
+		sent,
+		entries,
+		notifications,
+		statuses,
+		get completeCalls() {
+			return state.completeCalls;
 		},
-	} as never;
-
-	return { handlers, notifications, statuses, commands, flags, ctx };
+		ctx: ctx as never,
+	} as Harness;
 }
 
-function assistantMessage(text: string): unknown {
-	return { role: "assistant", content: [{ type: "text", text }] };
-}
-
-function settleEvent(text: string, entries: unknown[] = []): unknown {
+function settleEvent(text: string): unknown {
 	return {
 		type: "agent_before_settle",
 		outcome: "completed",
 		continue: false,
-		entries,
+		entries: [],
 		context: {
-			contextMessages: [assistantMessage(text)],
+			contextMessages: [{ role: "assistant", content: [{ type: "text", text }] }],
 			canContinue: true,
 			contextEntries: [],
 			llmMessages: [],
@@ -76,80 +109,111 @@ function settleEvent(text: string, entries: unknown[] = []): unknown {
 	};
 }
 
+function settledEvent(): unknown {
+	return { type: "agent_settled", aborted: false };
+}
+
 interface Case {
 	name: string;
+	/** Mode command, e.g. "nudge" or "virtual". */
+	mode: "nudge" | "virtual";
 	text: string;
-	expectContinue: boolean;
-	enforce?: boolean;
+	modelReply?: string;
+	expect: {
+		/** nudge: continue flag from the boundary handler. */
+		continued?: boolean;
+		/** virtual: user message injected. */
+		sent?: string;
+		/** virtual: model call happened at all. */
+		calls?: number;
+		/** virtual: audit entry written. */
+		audited?: boolean;
+	};
 }
 
 const CASES: Case[] = [
 	{
-		name: "permission question is continued",
+		name: "nudge: permission question continues",
+		mode: "nudge",
 		text: "提交：`2a44e0a`，190 测试绿。\n\n要我接着做这个吗？",
-		expectContinue: true,
-		enforce: true,
+		expect: { continued: true },
 	},
 	{
-		name: "silent status report is continued",
-		text: "工作区干净，184 测试绿。",
-		expectContinue: true,
-		enforce: true,
+		name: "nudge: BLOCKED is respected",
+		mode: "nudge",
+		text: "⏸ BLOCKED\n卡点：要不要清掉 470MB 中间产物",
+		expect: { continued: false },
 	},
 	{
-		name: "BLOCKED is respected",
-		text: "⏸ BLOCKED\n卡点：要不要清掉 470MB 中间产物\n候选：A 清 / B 留\n推荐：A，但删除不可逆，需要你确认。",
-		expectContinue: false,
-		enforce: true,
+		name: "nudge: DONE is respected",
+		mode: "nudge",
+		text: "✓ DONE\n190 测试绿。",
+		expect: { continued: false },
 	},
 	{
-		name: "DONE is respected",
-		text: "✓ DONE\n190 测试绿，工作区干净。",
-		expectContinue: false,
-		enforce: true,
+		name: "virtual: model says continue, reply is written as the user",
+		mode: "virtual",
+		text: "下一步我建议先把 op50 的读取地址补上。要我继续吗？",
+		expect: { sent: "继续", calls: 1, audited: true },
 	},
 	{
-		name: "dry-run never injects",
-		text: "要我接着做这个吗？",
-		expectContinue: false,
-		enforce: false,
+		name: "virtual: model says stop, nothing is sent",
+		mode: "virtual",
+		text: "190 测试绿，工作区干净。",
+		modelReply: STOP_JSON,
+		expect: { sent: undefined, calls: 1 },
+	},
+	{
+		name: "virtual: reply touching the never-list is dropped",
+		mode: "virtual",
+		text: "需要我装一下 Ghidra 吗？",
+		modelReply: '{"action":"continue","reply":"装一下新软件","reason":"它在问"}',
+		expect: { sent: undefined, calls: 1, audited: false },
+	},
+	{
+		name: "virtual: BLOCKED skips the model call entirely",
+		mode: "virtual",
+		text: "⏸ BLOCKED\n要不要清掉 470MB 中间产物",
+		expect: { sent: undefined, calls: 0 },
 	},
 ];
 
 let failures = 0;
 
 for (const testCase of CASES) {
-	const harness = createHarness();
+	const harness = createHarness({ modelReply: testCase.modelReply, lastAssistant: testCase.text });
 	const { ctx } = harness;
-	const reset = harness.handlers.get("before_agent_start");
-	const settle = harness.handlers.get("agent_before_settle");
-	const momentumCommand = harness.commands.get("momentum");
-	if (!reset || !settle || !momentumCommand) {
-		console.error("FAIL  extension did not register its handlers/command");
-		failures++;
-		continue;
+	const momentum = harness.commands.get("momentum")!;
+	const settle = harness.handlers.get("agent_before_settle")!;
+
+	await harness.handlers.get("session_start")!({ type: "session_start" }, ctx);
+	await momentum(testCase.mode, ctx);
+
+	let continued: boolean | undefined;
+	if (testCase.mode === "nudge") {
+		const result = (await settle(settleEvent(testCase.text), ctx)) as { continue?: boolean } | undefined;
+		continued = result?.continue === true;
+	} else {
+		await harness.handlers.get("agent_settled")!(settledEvent(), ctx);
 	}
 
-	// The extension starts in dry-run; flip it to enforce the way a user would.
-	if (testCase.enforce) await momentumCommand("enforce", ctx);
+	const problems: string[] = [];
+	if ("continued" in testCase.expect && continued !== testCase.expect.continued) {
+		problems.push(`continued=${continued}`);
+	}
+	if ("sent" in testCase.expect && harness.sent[0] !== testCase.expect.sent) {
+		problems.push(`sent=${JSON.stringify(harness.sent[0])}`);
+	}
+	if ("calls" in testCase.expect && harness.completeCalls !== testCase.expect.calls) {
+		problems.push(`calls=${harness.completeCalls}`);
+	}
+	if ("audited" in testCase.expect && (harness.entries.length > 0) !== testCase.expect.audited) {
+		problems.push(`audited=${harness.entries.length > 0}`);
+	}
 
-	// Reset the per-turn counter the way a real user prompt does.
-	await reset(
-		{ messageType: "user", prompt: testCase.name, systemPrompt: "", systemPromptOptions: {} },
-		ctx,
-	);
-
-	const result = (await settle(settleEvent(testCase.text), ctx)) as
-		| { entries?: unknown[]; continue?: boolean }
-		| undefined;
-
-	const continued = result?.continue === true;
-	const ok = continued === testCase.expectContinue;
+	const ok = problems.length === 0;
 	if (!ok) failures++;
-	console.log(
-		`${ok ? "ok  " : "FAIL"}  ${testCase.name}  → ${continued ? "continued" : "stopped"}` +
-			` (expected ${testCase.expectContinue ? "continued" : "stopped"})`,
-	);
+	console.log(`${ok ? "ok  " : "FAIL"}  ${testCase.name}${ok ? "" : `  → ${problems.join(" ")}`}`);
 }
 
 console.log();
@@ -158,4 +222,4 @@ if (failures > 0) {
 	process.exit(1);
 }
 console.log(`${CASES.length}/${CASES.length} smoke cases pass`);
-console.log(`  detector sees: ${analyzeTurnEnd("要我接着做这个吗？").verdict}`);
+console.log(`  detector: ${analyzeTurnEnd("要我接着做这个吗？").verdict}`);
