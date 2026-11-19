@@ -98,7 +98,20 @@ Now check the guardrails:
   `npm run corpus -- <session>` should tag those turns; `npm run analyze` should
   exclude them and print `(N excluded: replies injected by pi-momentum)`.
 
-## 5. Failure modes to watch for
+## 5. The TPS line must survive
+
+With pi-tps installed, end a turn that makes momentum act. The chat should read:
+
+```
+TPS 47.5 tok/s. out 431, in 1,722, ...
+ momentum sent → "继续"
+ waiting for the user · 900ms · model
+```
+
+If the TPS line is missing where momentum's block is, momentum wrote a
+notification from `agent_settled` and Pi coalesced the two into one line.
+
+## 6. Failure modes to watch for
 
 | symptom | likely cause |
 |---|---|
@@ -109,7 +122,7 @@ Now check the guardrails:
 | `capped` every turn | the agent never declares `DONE`; that is the known weak marker |
 | zero model calls when it should decide | `analyzeTurnEnd` matched `BLOCKED`/`DONE` — it only matches at line start |
 
-## 6. What to measure
+## 7. What to measure
 
 Per session, once there is real usage:
 

@@ -141,6 +141,23 @@ The default flips to `stop` for the same reason. In nudge mode a wrong "continue
 
 The never-list is a user-authored prefix plus a regex backstop, because substring matching does not survive paraphrase: `安装新软件或依赖` does not match `装一下新软件`. Built-in patterns cover the five categories; user entries are matched literally.
 
+## The trailing status slot
+
+Pi renders `ctx.ui.notify` as one dim line at the end of the chat, and it
+*coalesces* consecutive status lines: if the last two children are still the
+spacer and text of the previous status, the new message overwrites that line
+instead of appending (``InteractiveMode.showStatus``, "to avoid log spam").
+
+That makes the trailing status slot contested. pi-tps writes its TPS line from
+`agent_end`; anything momentum says from `agent_settled` arrives in the very next
+event with nothing in between, so a settle-time `notify` does not appear below
+the TPS line — it replaces it. You cannot see both.
+
+Momentum therefore writes decisions as session entries (`pi.appendEntry`), never
+as notifications. An entry is a real chat child, which both keeps the record and
+breaks the coalescing so the TPS line survives. Keep it that way: `notify` from
+`agent_settled` is a bug, not a style choice.
+
 ## Config: why one file
 
 The first versions stored rules in `.pi/momentum.json` at every ancestor, folded
