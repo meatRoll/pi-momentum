@@ -92,11 +92,24 @@ Lists merge shallow to deep, so a package adding its own rules never silently dr
 Scalars (`model`, `maxContinues`) take the deepest value.
 
 ```bash
-/momentum never list                  # shows [global] / [dir] per rule
+/momentum never list                  # shows [global] / [dir] per rule, and terms
 /momentum never add 不要碰 web 层     # deepest existing layer, else cwd
 /momentum never add --global 别删库    # the user file
+/momentum never add --raw 别动 x      # skip normalisation, store the text as typed
 /momentum never rm 不要碰 web 层       # edits the file that declares it
 ```
+
+`add` runs one model call to turn the sentence into match terms. You write
+"别让它在没问我之前就跑数据库迁移"; it stores
+
+```json
+{ "text": "不许改数据库迁移", "terms": ["数据库迁移", "迁移脚本", "schema 变更"] }
+```
+
+The text is what the model reads; the terms are what the guardrail matches
+against. Neither is derived from the other, which is why a rule written the way
+a person writes rules still fires. `--raw` keeps the sentence and falls back to
+the heuristic stripper.
 
 Rules are matched after stripping the prohibition and the verb, so `不许改数据库迁移` blocks a reply saying `改数据库迁移` — matching the literal would never fire. A comma-separated rule splits into separate terms. Over-blocking is the intended failure direction here: a rejected reply is silence, a missed one is a fabricated instruction.
 

@@ -16,7 +16,14 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { addNever, loadConfig, type MomentumConfig, originLabel, removeNever } from "./config.ts";
 import { analyzeTurnEnd, BLOCK_MARKER, DONE_MARKER } from "./detect.ts";
 import { RULES, SECTION_TAG } from "./rules.ts";
-import { buildSystemPrompt, DEFAULT_NEVER, type Decision, parseDecision } from "./virtual.ts";
+import {
+	buildSystemPrompt,
+	DEFAULT_NEVER,
+	type Decision,
+	parseDecision,
+	parseRuleResponse,
+	RULE_PROMPT,
+} from "./virtual.ts";
 import { VERSION } from "./version.ts";
 
 /** Every decision, rendered in the transcript, never sent to the model. */
@@ -147,7 +154,31 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 		} catch (error) {
 			return { decision: { action: "stop", reply: "", reason: `call failed: ${String(error)}` }, raw };
 		}
-		return { decision: parseDecision(raw, state.config.never), raw };
+		return { decision: parseDecision(raw, state.config.rules), raw };
+	}
+
+	/**
+	 * Turn what the user typed into a rule plus match terms. The heuristic in
+	 * virtual.ts covers the shapes we anticipated; this covers the rest, and the
+	 * fallback is the raw text so a failed call never loses the rule.
+	 */
+	async function normaliseRule(ctx: ExtensionContext, text: string) {
+		const model = resolveModel(ctx);
+		if (!model) return { text };
+		try {
+			const response = await ctx.modelRegistry.complete(
+				model,
+				{
+					systemPrompt: RULE_PROMPT,
+					messages: [{ role: "user", content: [{ type: "text", text }], timestamp: Date.now() }],
+				} as never,
+				{},
+			);
+			if (response.stopReason === "aborted" || response.stopReason === "error") return { text };
+			return parseRuleResponse(textOf(response.content), text);
+		} catch {
+			return { text };
+		}
 	}
 
 	if (tui) {
@@ -253,9 +284,14 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 					const entry = words.filter((word) => !word.startsWith("--")).join(" ").trim();
 
 					if (action === "add" && entry) {
-						const path = addNever(state.config, ctx.cwd, entry, scope);
+						const rule = words.includes("--raw") ? { text: entry } : await normaliseRule(ctx, entry);
+						const path = addNever(state.config, ctx.cwd, rule, scope);
 						state.config = loadConfig(ctx.cwd);
-						ctx.ui.notify(`momentum: wrote ${path}`, "info");
+						ctx.ui.notify(
+							`momentum: wrote ${path}\n  rule:  ${rule.text}` +
+								(rule.terms?.length ? `\n  terms: ${rule.terms.join(" · ")}` : ""),
+							"info",
+						);
 					} else if (action === "rm" && entry) {
 						const path = removeNever(state.config, entry);
 						if (!path) {
@@ -267,7 +303,11 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 					}
 
 					const localLayers = state.config.layers.filter((layer) => !layer.global);
-					const lines = state.config.rules.map((rule) => `  [${originLabel(rule, ctx.cwd)}] ${rule.text}`);
+					const lines = state.config.rules.map(
+						(rule) =>
+							`  [${originLabel(rule, ctx.cwd)}] ${rule.text}` +
+							(rule.terms?.length ? `\n      ↳ ${rule.terms.join(" · ")}` : ""),
+					);
 					ctx.ui.notify(
 						`momentum never-rules (${localLayers.length} local layer${localLayers.length === 1 ? "" : "s"}` +
 							`${state.config.replace ? ", shallower lists replaced" : ""}):\n` +

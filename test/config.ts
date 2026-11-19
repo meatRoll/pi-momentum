@@ -196,6 +196,36 @@ const cases: Case[] = [
 		},
 	},
 	{
+		name: "a rule can carry explicit match terms",
+		run: () => {
+			reset();
+			writeLayer(pkg, { never: [{ text: "不许改迁移", terms: ["数据库迁移", "迁移脚本"] }] });
+			const rule = loadConfig(nested).rules[0];
+			return rule?.text === "不许改迁移" && JSON.stringify(rule.terms) === JSON.stringify(["数据库迁移", "迁移脚本"]);
+		},
+	},
+	{
+		name: "adding an object keeps the plain strings around it",
+		run: () => {
+			reset();
+			writeLayer(pkg, { never: ["plain"] });
+			addNever(loadConfig(nested), nested, { text: "给了词的", terms: ["甲", "乙"] }, "local");
+			const raw = JSON.parse(readFileSync(layerConfigPath(pkg), "utf8")) as { never: unknown[] };
+			const shapes = raw.never.map((item) => (typeof item === "string" ? "string" : "object"));
+			return JSON.stringify(shapes) === JSON.stringify(["string", "object"]);
+		},
+	},
+	{
+		name: "removing by text drops an object rule",
+		run: () => {
+			reset();
+			writeLayer(pkg, { never: [{ text: "对象规则", terms: ["甲"] }, "普通规则"] });
+			removeNever(loadConfig(nested), "对象规则");
+			const raw = JSON.parse(readFileSync(layerConfigPath(pkg), "utf8")) as { never: unknown[] };
+			return JSON.stringify(raw.never) === JSON.stringify(["普通规则"]);
+		},
+	},
+	{
 		name: "a broken layer file does not throw",
 		run: () => {
 			reset();

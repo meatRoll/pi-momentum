@@ -89,7 +89,7 @@ ${banned}
 }
 
 /** Pull the first balanced JSON object out of a model response. */
-function extractJson(raw: string): string | undefined {
+export function extractJson(raw: string): string | undefined {
 	const text = raw.replace(/```(?:json)?/gi, "").trim();
 	const start = text.indexOf("{");
 	if (start < 0) return undefined;
@@ -118,7 +118,7 @@ function extractJson(raw: string): string | undefined {
  * Parse a model response into a Decision. Anything unusable degrades to "stop":
  * a malformed answer is not permission to speak for the user.
  */
-export function parseDecision(raw: string, never: readonly string[] = []): Decision {
+export function parseDecision(raw: string, never: readonly NeverInput[] = []): Decision {
 	const json = extractJson(raw);
 	if (!json) return { ...NO_REPLY, reason: "unparseable response" };
 
@@ -151,10 +151,22 @@ const PROHIBITION_PREFIX = /^(?:不要|不许|不准|不能|不得|禁止|严禁
 const LEADING_VERB =
 	/^(?:碰|动|改|修改|调整|变更|删除|删掉|删|清空|清掉|清|覆盖|移除|安装|装|重装|升级|下载|用|使用|加|添加|提交|推送|发布|部署)\s*/i;
 
-export function neverTerms(rules: readonly string[]): string[] {
+/** A rule is plain text, or text plus the phrases that mean it was violated. */
+export type NeverInput = string | { text: string; terms?: readonly string[] };
+
+export function neverTerms(rules: readonly NeverInput[]): string[] {
 	const terms: string[] = [];
 	for (const rule of rules) {
-		for (const part of rule.split(/[,，、;；]/)) {
+		// Explicit terms win: they were written for matching, not for reading.
+		if (typeof rule !== "string" && Array.isArray(rule.terms) && rule.terms.length > 0) {
+			for (const term of rule.terms) {
+				const trimmed = term.trim();
+				if (trimmed.length >= 2 && !terms.includes(trimmed)) terms.push(trimmed);
+			}
+			continue;
+		}
+		const text = typeof rule === "string" ? rule : rule.text;
+		for (const part of text.split(/[,，、;；]/)) {
 			const stripped = part.trim();
 			if (!stripped) continue;
 			const withoutProhibition = stripped.replace(PROHIBITION_PREFIX, "").trim();
@@ -175,7 +187,7 @@ export function neverTerms(rules: readonly string[]): string[] {
  * `never` entries are treated as literals (what the user wrote); the built-in
  * patterns cover paraphrases of the five default categories.
  */
-export function sanitizeReply(reply: string, never: readonly string[] = []): string {
+export function sanitizeReply(reply: string, never: readonly NeverInput[] = []): string {
 	let text = reply
 		.replace(/^["'`]+|["'`]+$/g, "")
 		.replace(/\s+/g, " ")
@@ -194,4 +206,51 @@ export function sanitizeReply(reply: string, never: readonly string[] = []): str
 		if (haystack.includes(term.toLowerCase())) return "";
 	}
 	return text;
+}
+
+/**
+ * Prompt for turning a rule a person typed into something the guardrail can use.
+ *
+ * The user writes "别让它在没问我之前就跑数据库迁移"; the matcher needs
+ * 数据库迁移 / 迁移 / schema 变更. Asking the model for those is far more reliable
+ * than stripping prefixes, which only works for the shapes we anticipated.
+ */
+export const RULE_PROMPT = `你在把用户的一句话禁令，整理成一条可执行的规则。
+
+输出 JSON：
+{"rule":"一句话规则，祈使或陈述式，不超过 20 字","terms":["短语","短语"]}
+
+terms 的要求：
+- 3~6 个，覆盖"这条禁令被违反时，回复里最可能出现什么"
+- 只用名词或名词短语，不要包含否定词（不要/不许/禁止/别）
+- 想具体的对象：文件名、模块名、表名、动作对象
+- 例："不许改数据库迁移" → ["数据库迁移","迁移脚本","schema 变更"]
+- 例："别让它在没问我之前删东西" → ["删除","清空","移除文件"]
+- 宁可多给几个，也不要漏
+
+只输出 JSON，不要解释。`;
+
+export interface NormalisedRule {
+	text: string;
+	terms?: string[];
+}
+
+/** Fall back to the raw text when the model cannot produce something usable. */
+export function parseRuleResponse(raw: string, fallback: string): NormalisedRule {
+	const json = extractJson(raw);
+	if (!json) return { text: fallback };
+	let parsed: Record<string, unknown>;
+	try {
+		parsed = JSON.parse(json) as Record<string, unknown>;
+	} catch {
+		return { text: fallback };
+	}
+	const text = typeof parsed.rule === "string" && parsed.rule.trim() ? parsed.rule.trim() : fallback;
+	const terms = Array.isArray(parsed.terms)
+		? parsed.terms
+				.filter((term): term is string => typeof term === "string")
+				.map((term) => term.trim())
+				.filter((term) => term.length >= 2)
+		: [];
+	return terms.length > 0 ? { text, terms } : { text };
 }

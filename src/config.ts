@@ -13,11 +13,18 @@
  * A monorepo package and its root are two scopes, not one.
  *
  * {
- *   "never": ["不要碰 vendor/", "不许改数据库迁移"],
+ *   "never": [
+ *     "不要碰 vendor/",
+ *     { "text": "不许改数据库迁移", "terms": ["数据库迁移", "迁移脚本"] }
+ *   ],
  *   "replace": true,           // drop every shallower layer's list
  *   "model": "provider/modelId",
  *   "maxContinues": 3
  * }
+ *
+ * A rule is either a plain string (writing the rule as a person would) or an
+ * object with `terms`: the phrases that, appearing in a reply, mean the rule was
+ * violated. `terms` is optional — without it the terms are derived heuristically.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -31,8 +38,13 @@ export interface ConfigLayer {
 	global: boolean;
 }
 
+/** A rule as stored: plain text, or text plus match terms. */
+export type NeverEntry = string | { text: string; terms?: readonly string[] };
+
 export interface NeverRule {
 	text: string;
+	/** Phrases whose presence in a reply violates the rule. */
+	terms?: string[];
 	/** Config file that declares it. */
 	file: string;
 	layer: "global" | "local";
@@ -102,6 +114,29 @@ function strings(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
+/** Normalise the many shapes `never` can be written in. */
+export function neverEntries(value: unknown): NeverRule[] {
+	if (!Array.isArray(value)) return [];
+	const out: NeverRule[] = [];
+	for (const item of value) {
+		if (typeof item === "string") {
+			if (item.trim()) out.push({ text: item.trim(), file: "", layer: "local" });
+			continue;
+		}
+		if (!item || typeof item !== "object") continue;
+		const { text, terms } = item as { text?: unknown; terms?: unknown };
+		if (typeof text !== "string" || !text.trim()) continue;
+		const parsedTerms = strings(terms).map((term) => term.trim()).filter(Boolean);
+		out.push({
+			text: text.trim(),
+			...(parsedTerms.length > 0 ? { terms: parsedTerms } : {}),
+			file: "",
+			layer: "local",
+		});
+	}
+	return out;
+}
+
 /** Fold the layers shallow to deep. */
 export function loadConfig(cwd: string): MomentumConfig {
 	const globalFile = globalConfigPath();
@@ -124,11 +159,16 @@ export function loadConfig(cwd: string): MomentumConfig {
 			replace = true;
 		}
 
-		for (const text of strings(raw.never)) {
-			const key = text.trim().toLowerCase();
+		for (const declared of neverEntries(raw.never)) {
+			const key = declared.text.trim().toLowerCase();
 			if (!key) continue;
 			const existing = rules.findIndex((rule) => rule.text.trim().toLowerCase() === key);
-			const rule: NeverRule = { text, file: layer.file, layer: layer.global ? "global" : "local" };
+			const rule: NeverRule = {
+				text: declared.text,
+				...(declared.terms ? { terms: declared.terms } : {}),
+				file: layer.file,
+				layer: layer.global ? "global" : "local",
+			};
 			// Deeper declarations take ownership of a duplicate, keeping its position.
 			if (existing >= 0) rules[existing] = rule;
 			else rules.push(rule);
@@ -161,14 +201,25 @@ export function originLabel(rule: NeverRule, cwd: string): string {
 }
 
 /** Read-modify-write a config file, preserving keys this extension does not own. */
-export function writeNever(path: string, never: string[]): void {
+/** Write the raw `never` array, preserving every other key in the file. */
+export function writeNever(path: string, never: unknown[]): void {
 	const existing = existsSync(path) ? (readRaw(path) as Record<string, unknown>) : {};
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, `${JSON.stringify({ ...existing, never }, null, 2)}\n`);
 }
 
-function readNever(path: string): string[] {
-	return existsSync(path) ? strings(readRaw(path).never) : [];
+/** The file's `never` value exactly as stored, so rewrites keep its shapes. */
+function readRawNever(path: string): unknown[] {
+	return existsSync(path) ? (Array.isArray(readRaw(path).never) ? (readRaw(path).never as unknown[]) : []) : [];
+}
+
+function ruleText(item: unknown): string | undefined {
+	if (typeof item === "string") return item.trim() || undefined;
+	if (item && typeof item === "object") {
+		const { text } = item as { text?: unknown };
+		if (typeof text === "string" && text.trim()) return text.trim();
+	}
+	return undefined;
 }
 
 /**
@@ -182,11 +233,11 @@ export function localTarget(config: MomentumConfig, cwd: string): string {
 export function addNever(
 	config: MomentumConfig,
 	cwd: string,
-	text: string,
+	entry: NeverEntry,
 	scope: "global" | "local",
 ): string {
 	const path = scope === "global" ? config.globalConfigPath : localTarget(config, cwd);
-	writeNever(path, [...readNever(path), text]);
+	writeNever(path, [...readRawNever(path), entry]);
 	return path;
 }
 
@@ -196,7 +247,7 @@ export function removeNever(config: MomentumConfig, text: string): string | unde
 	if (!rule) return undefined;
 	writeNever(
 		rule.file,
-		readNever(rule.file).filter((item) => item !== text),
+		readRawNever(rule.file).filter((item) => ruleText(item) !== text),
 	);
 	return rule.file;
 }

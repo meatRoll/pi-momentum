@@ -7,8 +7,20 @@
  * registers, and drives the gate through the cases that matter.
  */
 
+import { mkdtempSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { analyzeTurnEnd } from "../src/detect.ts";
 import momentumExtension from "../src/index.ts";
+import { RULE_PROMPT } from "../src/virtual.ts";
+import { loadConfig } from "../src/config.ts";
+
+// Never read or write the real config: rules are resolved from the working
+// directory and from $HOME.
+const ROOT = mkdtempSync(join(tmpdir(), "pi-momentum-smoke-"));
+process.env.HOME = join(ROOT, "home");
+const PROJECT = join(ROOT, "project");
+mkdirSync(join(PROJECT, ".pi"), { recursive: true });
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
@@ -30,6 +42,8 @@ interface HarnessOptions {
 	modelReply?: string;
 	/** Assistant text on the session branch. */
 	lastAssistant?: string;
+	/** Reply used when the call is rule normalisation rather than a decision. */
+	ruleReply?: string;
 }
 
 const CONTINUE_JSON = '{"action":"continue","reply":"继续","reason":"它在等确认"}';
@@ -52,14 +66,15 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 	};
 
 	const ctx = {
-		cwd: process.cwd(),
+		cwd: PROJECT,
 		model: { id: "fake-model", provider: "fake" },
 		modelRegistry: {
 			find: () => undefined,
-			complete: async () => {
+			complete: async (_model: unknown, context: { systemPrompt?: string }) => {
 				counters.completeCalls += 1;
+				const isRule = context?.systemPrompt === RULE_PROMPT;
 				return {
-					content: [{ type: "text", text: options.modelReply ?? CONTINUE_JSON }],
+					content: [{ type: "text", text: (isRule ? options.ruleReply : options.modelReply) ?? CONTINUE_JSON }],
 					stopReason: "stop",
 				};
 			},
@@ -270,6 +285,45 @@ for (const testCase of CASES) {
 	console.log(`${ok ? "ok  " : "FAIL"}  ${testCase.name}${ok ? "" : `  → ${problems.join(" ")}`}`);
 }
 
+// Rule normalisation: the user writes a sentence, the model turns it into
+// matchable terms, and the guardrail then uses those terms.
+{
+	const harness = await createHarness({
+		ruleReply: '{"rule":"不许改数据库迁移","terms":["数据库迁移","迁移脚本"]}',
+		modelReply: '{"action":"continue","reply":"那就跑数据库迁移吧","reason":"它在问"}',
+	});
+	const { ctx } = harness;
+	const momentum = harness.commands.get("momentum")!;
+	await harness.handlers.get("session_start")!({ type: "session_start" }, ctx);
+
+	await momentum("never add 别让它在没问我之前就跑数据库迁移", ctx);
+	const config = loadConfig(PROJECT);
+	const stored = config.rules[0];
+	const storedOk = stored?.terms?.includes("数据库迁移") === true;
+	if (!storedOk) failures++;
+	console.log(`${storedOk ? "ok  " : "FAIL"}  never add stores model-derived terms → ${JSON.stringify(stored?.terms)}`);
+
+	// The round trip that matters: a reply echoing the forbidden object is caught.
+	const before = harness.sent.length;
+	await momentum("on", ctx);
+	await harness.handlers.get("agent_settled")!(settledEvent(), ctx);
+	const blocked = harness.sent.length === before;
+	if (!blocked) failures++;
+	console.log(`${blocked ? "ok  " : "FAIL"}  a reply using the forbidden term is not sent`);
+}
+
+// --raw keeps the rule exactly as typed.
+{
+	const harness = await createHarness();
+	const { ctx } = harness;
+	await harness.handlers.get("session_start")!({ type: "session_start" }, ctx);
+	await harness.commands.get("momentum")!("never add --raw 不要碰 vendor/", ctx);
+	const config = loadConfig(PROJECT);
+	const raw = config.rules.some((rule) => rule.text === "不要碰 vendor/" && !rule.terms);
+	if (!raw) failures++;
+	console.log(`${raw ? "ok  " : "FAIL"}  never add --raw stores the text verbatim`);
+}
+
 // Autocomplete: the whole point is that `/momentum ` is discoverable.
 const probe = await createHarness();
 await probe.handlers.get("session_start")!({ type: "session_start" }, probe.ctx);
@@ -305,5 +359,5 @@ if (failures > 0) {
 	console.error(`${failures} case(s) failed`);
 	process.exit(1);
 }
-console.log(`${CASES.length + autocompleteCases.length + 1} smoke cases pass`);
+console.log(`${CASES.length + autocompleteCases.length + 3} smoke cases pass`);
 console.log(`  detector: ${analyzeTurnEnd("要我接着做这个吗？").verdict}`);
