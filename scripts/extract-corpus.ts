@@ -71,7 +71,10 @@ export function readSession(sessionPath: string): Corpus {
 			continue;
 		}
 		if (parsed.type === "custom") {
-			if (parsed.customType === "pi-momentum/virtual-reply") pendingVirtual = true;
+			const data = parsed.data as { sent?: boolean } | undefined;
+			const legacy = parsed.customType === "pi-momentum/virtual-reply";
+			const sentDecision = parsed.customType === "pi-momentum/decision" && data?.sent === true;
+			if (legacy || sentDecision) pendingVirtual = true;
 			continue;
 		}
 		if (parsed.type !== "message") continue;

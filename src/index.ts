@@ -19,8 +19,30 @@ import { RULES, SECTION_TAG } from "./rules.ts";
 import { buildSystemPrompt, DEFAULT_NEVER, type Decision, parseDecision } from "./virtual.ts";
 
 const CONTINUE_CUSTOM_TYPE = "pi-momentum/continue";
-const VIRTUAL_ENTRY_TYPE = "pi-momentum/virtual-reply";
+/** Every decision, dry or sent. Renders in the transcript, never enters LLM context. */
+const DECISION_ENTRY_TYPE = "pi-momentum/decision";
 const MAX_DEFAULT = 3;
+
+interface DecisionEntry {
+	dry: boolean;
+	/** True only when the reply was actually injected as a user message. */
+	sent: boolean;
+	action: "continue" | "stop" | "skip";
+	reply: string;
+	reason: string;
+	/** The assistant text the decision was made on. */
+	input: string;
+	raw?: string;
+	/** Offending line, when the pre-filter skipped the call. */
+	detail?: string;
+	model?: string;
+	ms: number;
+}
+
+function preview(text: string, limit = 200): string {
+	const flat = text.replace(/\s+/g, " ").trim();
+	return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
+}
 
 type Mode = "off" | "nudge" | "virtual";
 
@@ -93,7 +115,13 @@ function stop(status: string, ctx: ExtensionContext): void {
 	ctx.ui.setStatus("momentum", `⚡ ${status}`);
 }
 
-export default function momentumExtension(pi: ExtensionAPI): void {
+export default async function momentumExtension(pi: ExtensionAPI): Promise<void> {
+	// Only available inside Pi. Offline tests must not need it, and a renderer is
+	// a convenience: the extension works without one.
+	const tui = (await import("@earendil-works/pi-tui").catch(() => undefined)) as
+		| { Box: new (...args: never[]) => unknown; Text: new (...args: never[]) => unknown }
+		| undefined;
+
 	const state: MomentumState = { ...DEFAULT_STATE, config: { never: [] } };
 
 	function resolveModel(ctx: ExtensionContext) {
@@ -139,6 +167,43 @@ export default function momentumExtension(pi: ExtensionAPI): void {
 		}
 		return { decision: parseDecision(raw, state.config.never), raw };
 	}
+
+	// Dry-run needs a durable artifact, not a transient notify: a decision you
+	// cannot go back and read is a decision you cannot evaluate.
+	if (tui) pi.registerEntryRenderer<DecisionEntry>(DECISION_ENTRY_TYPE, (entry, { expanded }, theme) => {
+		const data = entry.data;
+		const { Box, Text } = tui as never as Record<string, never> as {
+			Box: new (a: number, b: number, c: (t: string) => string) => { addChild: (n: unknown) => void };
+			Text: new (t: string, a?: number, b?: number) => unknown;
+		};
+		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+		const status = data.dry
+			? theme.fg("warning", "dry")
+			: data.sent
+				? theme.fg("success", "sent")
+				: theme.fg("dim", "stopped");
+		const head =
+			data.action === "continue"
+				? `${theme.bold(theme.fg("accent", "momentum"))} ${status} → ${theme.bold(`“${data.reply}”`)}`
+				: `${theme.bold(theme.fg("accent", "momentum"))} ${status} · ${data.action}`;
+		box.addChild(new Text(head, 0, 0));
+		box.addChild(
+			new Text(
+				theme.fg(
+					"dim",
+					`${data.reason || "no reason"} · ${data.ms}ms${data.model ? ` · ${data.model}` : ""}`,
+				),
+				0,
+				0,
+			),
+		);
+		if (expanded) {
+			box.addChild(new Text(theme.fg("muted", `in:  ${data.input}`), 0, 0));
+			if (data.detail) box.addChild(new Text(theme.fg("muted", `hit: ${data.detail}`), 0, 0));
+			if (data.raw) box.addChild(new Text(theme.fg("muted", `raw: ${data.raw}`), 0, 0));
+		}
+		return box;
+	});
 
 	pi.registerFlag("momentum", {
 		description: "pi-momentum: continue runs until the agent declares BLOCKED or DONE",
@@ -323,38 +388,63 @@ export default function momentumExtension(pi: ExtensionAPI): void {
 			return;
 		}
 
-		const text = lastAssistantTextFromBranch(ctx);
+	const text = lastAssistantTextFromBranch(ctx);
 		if (!text.trim()) return;
 
-		// Cheap pre-filter: explicit BLOCKED/DONE needs no model call.
+		const model = resolveModel(ctx)?.id;
+
+		// Cheap pre-filter: explicit BLOCKED/DONE needs no model call. In dry-run this
+		// is still reported, otherwise silence is ambiguous — did it decide, or not run?
 		const quick = analyzeTurnEnd(text);
-		if (quick.verdict !== "continue") return;
+		if (quick.verdict !== "continue") {
+			if (state.dryRun) {
+				pi.appendEntry(DECISION_ENTRY_TYPE, {
+					dry: true,
+					sent: false,
+					action: "skip",
+					reply: "",
+					reason: `agent declared ${quick.verdict.toUpperCase()} — no model call`,
+					input: preview(text),
+					model,
+					ms: 0,
+					detail: quick.tail,
+				} satisfies DecisionEntry);
+			}
+			return;
+		}
 
-		const decision = await askVirtualUser(ctx, text);
+		const startedAt = Date.now();
+		const { decision, raw } = await askVirtualUser(ctx, text);
+		const ms = Date.now() - startedAt;
+		const entry: Omit<DecisionEntry, "sent" | "dry"> = {
+			action: decision.action === "continue" && decision.reply ? "continue" : "stop",
+			reply: decision.reply,
+			reason: decision.reason,
+			input: preview(text),
+			raw: raw.slice(0, 600),
+			model,
+			ms,
+		};
 
-		if (decision.decision.action !== "continue" || !decision.decision.reply) {
-			stop(`stop: ${decision.decision.reason || "nothing to add"}`, ctx);
+		if (decision.action !== "continue" || !decision.reply) {
+			pi.appendEntry(DECISION_ENTRY_TYPE, { ...entry, dry: state.dryRun, sent: false } satisfies DecisionEntry);
+			stop(`stop: ${decision.reason || "nothing to add"}`, ctx);
 			return;
 		}
 
 		if (state.dryRun) {
-			ctx.ui.notify(`momentum[dry]: would reply "${decision.decision.reply}"`, "info");
+			pi.appendEntry(DECISION_ENTRY_TYPE, { ...entry, dry: true, sent: false } satisfies DecisionEntry);
 			return;
 		}
 
 		state.continues += 1;
-		state.lastSentReply = decision.decision.reply;
+		state.lastSentReply = decision.reply;
 		refreshStatus(state, ctx);
 
-		// Audit trail: the transcript must stay able to tell a human from us.
-		pi.appendEntry(VIRTUAL_ENTRY_TYPE, {
-			reply: decision.decision.reply,
-			reason: decision.decision.reason,
-			model: ctx.model?.id,
-			at: Date.now(),
-		});
-
-		pi.sendUserMessage(decision.decision.reply);
+		// Written before the message so the corpus extractor can tell this user
+		// message from a human one.
+		pi.appendEntry(DECISION_ENTRY_TYPE, { ...entry, dry: false, sent: true } satisfies DecisionEntry);
+		pi.sendUserMessage(decision.reply);
 	});
 
 	pi.on("session_start", async (_event, ctx) => {

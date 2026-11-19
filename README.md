@@ -39,7 +39,7 @@ The prompt is an intent reader, not a persona: understand what the message is as
 
 Costs one cheap model call per stop. Pin a model with `"model": "provider/id"` in the config file; otherwise the active model is used.
 
-Every injected reply also writes a `pi-momentum/virtual-reply` entry, so a transcript can always tell a human from the extension.
+Every decision writes a `pi-momentum/decision` entry: action, reply, reason, the text it read, the raw model response, latency and model. In dry-run that entry is the whole point — you can go back and read what it would have said. For replies that were actually sent, the same entry carries `sent: true`, so a transcript can always tell a human from the extension.
 
 ### nudge
 

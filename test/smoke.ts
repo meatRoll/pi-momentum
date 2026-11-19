@@ -33,7 +33,7 @@ interface HarnessOptions {
 const CONTINUE_JSON = '{"action":"continue","reply":"继续","reason":"它在等确认"}';
 const STOP_JSON = '{"action":"stop","reply":"","reason":"已经宣布完成"}';
 
-function createHarness(options: HarnessOptions = {}): Harness {
+async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 	const handlers = new Map<string, Handler>();
 	const commands = new Map<string, Handler>();
 	const sent: string[] = [];
@@ -74,11 +74,12 @@ function createHarness(options: HarnessOptions = {}): Harness {
 		on: (event: string, handler: Handler) => handlers.set(event, handler),
 		registerCommand: (name: string, options_: { handler: Handler }) => commands.set(name, options_.handler),
 		registerFlag: () => {},
+		registerEntryRenderer: () => {},
 		appendEntry: (type: string, data: unknown) => entries.push({ type, data }),
 		sendUserMessage: (content: string) => sent.push(content),
 	};
 
-	momentumExtension(pi as never);
+	await momentumExtension(pi as never);
 	return {
 		handlers,
 		commands,
@@ -126,13 +127,17 @@ interface Case {
 		sent?: string;
 		/** virtual: model call happened at all. */
 		calls?: number;
-		/** virtual: audit entry written. */
+		/** virtual: a decision entry with sent=true was written. */
 		audited?: boolean;
+		/** virtual: any decision entry was written (dry-run included). */
+		logged?: boolean;
 		/** notification substring */
 		notified?: string;
 	};
 	/** Run `/momentum test <probe>` instead of the settle flow. */
 	probe?: string;
+	/** Switch to dry-run before settling. */
+	dryRun?: boolean;
 }
 
 const CASES: Case[] = [
@@ -181,6 +186,13 @@ const CASES: Case[] = [
 		expect: { sent: undefined, calls: 0 },
 	},
 	{
+		name: "virtual dry-run logs the decision but sends nothing",
+		mode: "virtual",
+		text: "要我接着做这个吗？",
+		dryRun: true,
+		expect: { sent: undefined, calls: 1, audited: false, logged: true },
+	},
+	{
 		name: "test command probes the decision without sending anything",
 		mode: "virtual",
 		probe: "要我接着做这个吗？",
@@ -198,13 +210,14 @@ const CASES: Case[] = [
 let failures = 0;
 
 for (const testCase of CASES) {
-	const harness = createHarness({ modelReply: testCase.modelReply, lastAssistant: testCase.text });
+	const harness = await createHarness({ modelReply: testCase.modelReply, lastAssistant: testCase.text });
 	const { ctx } = harness;
 	const momentum = harness.commands.get("momentum")!;
 	const settle = harness.handlers.get("agent_before_settle")!;
 
 	await harness.handlers.get("session_start")!({ type: "session_start" }, ctx);
 	await momentum(testCase.mode, ctx);
+	if (testCase.dryRun) await momentum("dry", ctx);
 
 	let continued: boolean | undefined;
 	if (testCase.probe) {
@@ -226,8 +239,12 @@ for (const testCase of CASES) {
 	if ("calls" in testCase.expect && harness.completeCalls !== testCase.expect.calls) {
 		problems.push(`calls=${harness.completeCalls}`);
 	}
-	if ("audited" in testCase.expect && (harness.entries.length > 0) !== testCase.expect.audited) {
-		problems.push(`audited=${harness.entries.length > 0}`);
+	const sentEntries = harness.entries.filter((entry) => (entry.data as { sent?: boolean } | undefined)?.sent === true);
+	if ("audited" in testCase.expect && (sentEntries.length > 0) !== testCase.expect.audited) {
+		problems.push(`audited=${sentEntries.length > 0}`);
+	}
+	if ("logged" in testCase.expect && (harness.entries.length > 0) !== testCase.expect.logged) {
+		problems.push(`logged=${harness.entries.length > 0}`);
 	}
 	if (testCase.expect.notified && !harness.notifications.some((line) => line.includes(testCase.expect.notified!))) {
 		problems.push(`notification missing ${JSON.stringify(testCase.expect.notified)}`);

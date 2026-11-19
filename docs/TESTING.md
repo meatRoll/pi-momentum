@@ -76,8 +76,18 @@ transcript the user never said.
 /momentum dry          # first pass: observe only
 ```
 
-Work normally. Every stop prints `momentum[dry]: would reply "…"`. Collect
-around ten before turning sending on, and judge the replies, not the verdicts.
+Work normally. Every stop appends a rendered block to the transcript:
+
+```
+momentum dry → "继续"
+ended with a question although a recommendation was stated · 812ms · gpt-5.1-mini
+```
+
+Expand it (the entry respects `expanded`) to see the input text it read and the
+raw model response. Decisions the pre-filter skipped render too, with
+`agent declared BLOCKED — no model call`, so silence is never ambiguous.
+Collect around ten before turning sending on, and judge the replies, not the
+verdicts.
 
 ```
 /momentum send
