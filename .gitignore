@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.log
+
+# Raw session transcripts are large and local-only; the derived corpus is committed.
+fixtures/sessions/*.jsonl
+fixtures/sessions/*.json
