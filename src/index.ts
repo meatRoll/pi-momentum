@@ -16,7 +16,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { addNever, loadConfig, type MomentumConfig, originLabel, removeNever } from "./config.ts";
 import { analyzeTurnEnd, BLOCK_MARKER, continuationPrompt, DONE_MARKER } from "./detect.ts";
 import { RULES, SECTION_TAG } from "./rules.ts";
-import { buildSystemPrompt, type Decision, parseDecision } from "./virtual.ts";
+import { buildSystemPrompt, DEFAULT_NEVER, type Decision, parseDecision } from "./virtual.ts";
 
 const CONTINUE_CUSTOM_TYPE = "pi-momentum/continue";
 const VIRTUAL_ENTRY_TYPE = "pi-momentum/virtual-reply";
@@ -246,8 +246,12 @@ export default function momentumExtension(pi: ExtensionAPI): void {
 					break;
 			}
 			refreshStatus(state, ctx);
+			const builtin = `${DEFAULT_NEVER.length} built-in`;
 			ctx.ui.notify(
-				`momentum: ${state.mode}${state.dryRun ? " (dry-run)" : ""} · max ${state.maxContinues} · ${state.config.never.length} never-rules`,
+				`momentum: ${state.mode}${state.dryRun ? " (dry-run, nothing is sent)" : ""} · max ${state.maxContinues} · ` +
+					(state.config.never.length === 0
+						? `no never-rules set (${builtin} still active)`
+						: `${state.config.never.length} never-rules + ${builtin}`),
 				"info",
 			);
 		},
@@ -358,8 +362,8 @@ export default function momentumExtension(pi: ExtensionAPI): void {
 		refreshStatus(state, ctx);
 		const local = state.config.layers.filter((layer) => !layer.global);
 		ctx.ui.notify(
-			`pi-momentum ${state.mode}${state.dryRun ? " (dry-run)" : ""} · ${state.config.never.length} never-rules ` +
-				`from ${local.length} local layer${local.length === 1 ? "" : "s"}. Markers: ${BLOCK_MARKER} / ${DONE_MARKER}`,
+			`pi-momentum ${state.mode}${state.dryRun ? " (dry-run)" : ""} · ${state.config.never.length} user never-rules ` +
+				`+ ${DEFAULT_NEVER.length} built-in from ${local.length} local layer${local.length === 1 ? "" : "s"}. Markers: ${BLOCK_MARKER} / ${DONE_MARKER}`,
 			"info",
 		);
 	});
