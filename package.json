@@ -1,6 +1,6 @@
 {
   "name": "pi-momentum",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "type": "module",
   "description": "Keep Pi moving: continue whenever the agent already has a recommendation, stop only when it genuinely cannot decide.",
   "keywords": [

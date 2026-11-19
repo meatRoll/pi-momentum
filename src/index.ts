@@ -42,7 +42,7 @@ const SUBCOMMANDS = [
 
 const NEVER_SUBCOMMANDS = [
 	{ value: "list", label: "list", description: "show rules with their layer" },
-	{ value: "add", label: "add", description: "append a rule (--global for the user layer)" },
+	{ value: "add", label: "add", description: "append a rule (--global user layer, --here exact cwd)" },
 	{ value: "rm", label: "rm", description: "remove a rule from the file that declares it" },
 ];
 
@@ -281,11 +281,12 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 				case "never": {
 					const [action = "list", ...words] = rest;
 					const scope = words.includes("--global") ? "global" : "local";
+					const exact = words.includes("--here");
 					const entry = words.filter((word) => !word.startsWith("--")).join(" ").trim();
 
 					if (action === "add" && entry) {
 						const rule = words.includes("--raw") ? { text: entry } : await normaliseRule(ctx, entry);
-						const path = addNever(state.config, ctx.cwd, rule, scope);
+						const path = addNever(state.config, ctx.cwd, rule, scope, exact);
 						state.config = loadConfig(ctx.cwd);
 						ctx.ui.notify(
 							`momentum: wrote ${path}\n  rule:  ${rule.text}` +
@@ -403,6 +404,12 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 			async getSuggestions(lines, cursorLine, cursorCol, options) {
 				const before = (lines[cursorLine] ?? "").slice(0, cursorCol);
 
+				const neverFlag = before.match(/^\s*\/momentum\s+never\s+add\s+(--\S*)$/);
+				if (neverFlag) {
+					const prefix = neverFlag[1] ?? "";
+					return { prefix, items: NEVER_FLAGS.filter((item) => item.value.startsWith(prefix)) };
+				}
+
 				const neverMatch = before.match(/^\s*\/momentum\s+never\s+(\S*)$/);
 				if (neverMatch) {
 					const prefix = neverMatch[1] ?? "";
@@ -430,6 +437,12 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 		}));
 	});
 }
+
+const NEVER_FLAGS = [
+	{ value: "--global", label: "--global", description: "write to ~/.pi/agent/momentum.json" },
+	{ value: "--here", label: "--here", description: "write to ./.pi/momentum.json, ignoring other layers" },
+	{ value: "--raw", label: "--raw", description: "store the sentence as typed, skip normalisation" },
+];
 
 const MAX_OPTIONS = ["1", "2", "3", "5", "10"].map((value) => ({
 	value,

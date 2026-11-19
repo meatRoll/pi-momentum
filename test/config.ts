@@ -7,7 +7,7 @@
  * the real ~/.pi/agent. No .git is created anywhere: layers are pure paths.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -46,6 +46,9 @@ function reset(): void {
 	writeJson(globalConfigPath(), { never: [] });
 	writeLayer(project, { never: [] });
 	writeLayer(pkg, { never: [] });
+	// Tests may create a layer at the working directory itself; leaving it behind
+	// makes it the deepest layer for every later test.
+	if (existsSync(layerConfigPath(nested))) rmSync(layerConfigPath(nested));
 }
 
 interface Case {
@@ -158,6 +161,25 @@ const cases: Case[] = [
 			reset();
 			const path = addNever(loadConfig(nested), nested, "pkg-rule", "local");
 			return path === layerConfigPath(pkg) && readLayer(pkg).never?.includes("pkg-rule") === true;
+		},
+	},
+	{
+		name: "--here writes the working directory even when a layer exists above",
+		run: () => {
+			reset();
+			writeLayer(project, { never: ["root"] });
+			const path = addNever(loadConfig(nested), nested, "here-rule", "local", true);
+			return path === layerConfigPath(nested) && readLayer(nested).never?.includes("here-rule") === true;
+		},
+	},
+	{
+		name: "without --here the nearest existing layer wins",
+		run: () => {
+			reset();
+			// Only the project layer exists, so that is where the rule belongs.
+			rmSync(layerConfigPath(pkg));
+			const path = addNever(loadConfig(nested), nested, "root-rule", "local");
+			return path === layerConfigPath(project);
 		},
 	},
 	{

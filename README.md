@@ -93,11 +93,20 @@ Scalars (`model`, `maxContinues`) take the deepest value.
 
 ```bash
 /momentum never list                  # shows [global] / [dir] per rule, and terms
-/momentum never add 不要碰 web 层     # deepest existing layer, else cwd
-/momentum never add --global 别删库    # the user file
+/momentum never add 不要碰 web 层     # nearest existing layer, else cwd
+/momentum never add --global 别删库    # the user file, every project
+/momentum never add --here 别删数据    # exactly ./.pi/momentum.json
 /momentum never add --raw 别动 x      # skip normalisation, store the text as typed
 /momentum never rm 不要碰 web 层       # edits the file that declares it
 ```
+
+Where a rule lands:
+
+| flag | target |
+|---|---|
+| none | the nearest `.pi/momentum.json` above the cwd; if there is none, `./.pi/momentum.json` |
+| `--here` | `./.pi/momentum.json`, even when a layer exists above |
+| `--global` | `~/.pi/agent/momentum.json` |
 
 `add` runs one model call to turn the sentence into match terms. You write
 "别让它在没问我之前就跑数据库迁移"; it stores

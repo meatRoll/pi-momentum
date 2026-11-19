@@ -226,7 +226,8 @@ function ruleText(item: unknown): string | undefined {
  * Where a new rule goes: the deepest local layer, or the working directory when
  * no layer exists yet. Pure path semantics — any directory can own a layer.
  */
-export function localTarget(config: MomentumConfig, cwd: string): string {
+export function localTarget(config: MomentumConfig, cwd: string, exact = false): string {
+	if (exact) return layerConfigPath(resolve(cwd));
 	return config.localRoot ? layerConfigPath(config.localRoot) : layerConfigPath(resolve(cwd));
 }
 
@@ -235,8 +236,9 @@ export function addNever(
 	cwd: string,
 	entry: NeverEntry,
 	scope: "global" | "local",
+	exact = false,
 ): string {
-	const path = scope === "global" ? config.globalConfigPath : localTarget(config, cwd);
+	const path = scope === "global" ? config.globalConfigPath : localTarget(config, cwd, exact);
 	writeNever(path, [...readRawNever(path), entry]);
 	return path;
 }
