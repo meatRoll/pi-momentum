@@ -19,46 +19,52 @@ The decisive observation: partway through that session the user typed *"如果�
 
 The raw transcript is private and is not in this repository; the figures above come from running `scripts/analyze.ts` over it. See [`fixtures/README.md`](fixtures/README.md) for what ships.
 
-## Modes
+## Commands
 
 ```
-/momentum nudge      # push the agent to continue; never speaks as the user
-/momentum virtual    # decide as if the user, and inject that reply
-/momentum dry        # virtual, but logged and never sent
-/momentum max 5      # raise the continuation cap
-/momentum off
+/momentum on          # start replying for you
+/momentum off         # stop
+/momentum test        # simulate the reply for the last message, send nothing
+/momentum max 5       # raise the cap
 ```
 
-Both modes stop when the agent declares `⏸ BLOCKED` or `✓ DONE`.
+Arguments complete on Tab, including nested ones (`never add`, `max 3`).
 
-### Choosing a mode
+## What `on` does
 
-| | nudge | virtual |
-|---|---|---|
-| what the agent receives | a fixed "you are allowed to continue" instruction | a message attributed to the user |
-| extra model call | none | one per stop |
-| can put words in your mouth | **no** | yes, mitigated by the never-list and the audit entry |
-| works when the model can't emit JSON | yes | no |
+When a run goes idle, one isolated one-shot model call reads **only the agent's
+last message** and decides whether that text is waiting on the user. If it is,
+the same call produces the one-line reply a user would send, and the extension
+injects it as a real user message.
 
-Try `nudge` first. It is deterministic, free, and it never fabricates user
-input — the agent decides what to do next on its own authority. Reach for
-`virtual` when the agent keeps stalling on decisions it will not make by itself:
-there the missing signal is *the user said go*, and only a user message supplies
-it.
+The prompt is an intent reader, not a persona: understand what the message is
+asking for, then say the thing that keeps it moving. When the message offers
+several options, it takes the one the agent itself recommended; with no
+recommendation it takes the smallest, most reversible step. Otherwise it stays
+silent and you get the turn back.
 
-### virtual
+`⏸ BLOCKED` and `✓ DONE` short-circuit before the model call: an agent that says
+what it is doing costs nothing to respect.
 
-When a run goes idle, one isolated one-shot model call reads **only the agent's last message** and decides whether that text is waiting on the user. If it is, the same call produces the one-line reply a user would send, and the extension injects it as a real user message.
+Costs one cheap model call per stop. Pin a model with `"model": "provider/id"`
+in the config file; otherwise the active model is used.
 
-The prompt is an intent reader, not a persona: understand what the message is asking for, then say the thing that keeps it moving. When the message offers several options, it takes the one the agent itself recommended; with no recommendation it takes the smallest, most reversible step. Otherwise it stays silent.
+Every decision writes a `pi-momentum/decision` entry: action, reply, reason, the
+text it read, the raw model response, latency and model. Entries that were
+actually sent carry `sent: true`, so a transcript can always tell a human from
+the extension.
 
-Costs one cheap model call per stop. Pin a model with `"model": "provider/id"` in the config file; otherwise the active model is used.
+## `test`
 
-Every decision writes a `pi-momentum/decision` entry: action, reply, reason, the text it read, the raw model response, latency and model. In dry-run that entry is the whole point — you can go back and read what it would have said. For replies that were actually sent, the same entry carries `sent: true`, so a transcript can always tell a human from the extension.
+```
+/momentum test                       # the conversation as it stands
+/momentum test 要我继续吗？           # arbitrary text
+```
 
-### nudge
-
-Runs on `agent_before_settle`, the last actionable boundary before a run goes idle. If the last assistant message carried neither marker, it appends a fixed instruction and asks for one more provider request. No extra model call.
+Runs the same decision and prints action, reply, reason, `would send`, the input
+it read and the raw model response. Nothing is sent and nothing is logged, so it
+is free to try repeatedly — the way to check a prompt change or a never-rule
+without waiting for a real stop.
 
 ### Never-list
 

@@ -164,33 +164,3 @@ export function analyzeTurnEnd(text: string): TurnEndAnalysis {
 				: "stopped with no explicit BLOCKED or DONE marker",
 	};
 }
-
-/**
- * The nudge injected when the agent stopped without a BLOCKED/DONE marker.
- * Kept short: it is appended to the transcript on every continuation.
- */
-export function continuationPrompt(analysis: TurnEndAnalysis): string {
-	const lines = [
-		"Momentum: 你停下来了，但没有声明 ⏸ BLOCKED 或 ✓ DONE，因此这一轮不成立。",
-		"",
-	];
-	if (analysis.hasRecommendation) {
-		lines.push("你已经给出推荐方案。按它直接执行，不要再确认。");
-	} else if (analysis.endsWithQuestion) {
-		lines.push("如果你其实已经知道下一步做什么：直接做，不要问。");
-	} else {
-		lines.push("先说清下一步是什么，然后立刻开始执行。");
-	}
-	lines.push(
-		"",
-		"只有下面四类情况才允许你停下并等待用户：",
-		"1. 不可逆或破坏性操作（删除数据、重装系统级软件、改写远程历史）",
-		"2. 外部副作用或花钱（对外发布、真实请求、付费接口）",
-		"3. 只有用户掌握的偏好、优先级或私有信息",
-		"4. 目标本身有歧义（不是方案没定）",
-		"",
-		"命中上述任一类：输出 ⏸ BLOCKED，然后写清卡点、候选方案、你的推荐、以及为什么不够格自决。",
-		"任务真的做完：输出 ✓ DONE 加一句结论。",
-	);
-	return lines.join("\n");
-}

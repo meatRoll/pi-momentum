@@ -11,8 +11,9 @@ Restart Pi, then:
 /momentum
 ```
 
-Expect a notify like `momentum: off (dry-run) · max 3 · N never-rules` and an
-`⚡` absence while off. If nothing appears, run `pi-manager doctor --json` and
+Expect `momentum v<X>: off · max 3 · …`. If the version is missing or older than
+the published one, the process is still on an older snapshot: restart it. A
+published snapshot never reaches a running process. If nothing appears, run `pi-manager doctor --json` and
 check the snapshot is published.
 
 ```
@@ -56,8 +57,8 @@ sending anything**. With no argument it reads the last assistant message, so you
 can probe the conversation as it stands without waiting for a stop; with an
 argument it reads that text instead.
 
-Note that `/momentum dry` is a mode switch, not an action: it arms logging for
-the *next* time the agent stops. `/momentum test` is the immediate probe.
+`/momentum on` is a mode switch, not an action: it arms the gate for the *next*
+time the agent stops. `/momentum test` is the immediate probe.
 
 | input | expect |
 |---|---|
@@ -76,30 +77,23 @@ transcript the user never said.
 ## 4. End to end
 
 ```
-/momentum virtual
-/momentum dry          # first pass: observe only
+/momentum on
 ```
 
-Work normally. Every stop appends a rendered block to the transcript:
+Work normally. Every decision appends a rendered block to the transcript:
 
 ```
-momentum dry → "继续"
+momentum sent → "继续"
 ended with a question although a recommendation was stated · 812ms · gpt-5.1-mini
 ```
 
 Expand it (the entry respects `expanded`) to see the input text it read and the
-raw model response. Decisions the pre-filter skipped render too, with
-`agent declared BLOCKED — no model call`, so silence is never ambiguous.
-Collect around ten before turning sending on, and judge the replies, not the
-verdicts.
-
-```
-/momentum send
-```
+raw model response. Use `/momentum test` on any message you want to inspect
+before it happens. Judge the replies, not the verdicts.
 
 Now check the guardrails:
 
-- **Cap** — keep the agent spinning; after `max` continuations the footer shows
+- **Cap** — keep the agent spinning; after `max` replies the footer shows
   `⚡ capped` and control returns.
 - **Reset** — type anything yourself; the counter goes back to `0/N`.
 - **Audit** — each injected reply writes a `pi-momentum/virtual-reply` entry.

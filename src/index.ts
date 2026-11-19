@@ -1,70 +1,68 @@
 /**
  * pi-momentum — a turn-end gate for Pi.
  *
- * Two modes:
+ *   on    when a run goes idle, read the agent's last message; if it is waiting
+ *         on the user, inject the one-line reply a user would send
+ *   off   do nothing
+ *   test  run the same decision on demand, and send nothing
  *
- *   nudge    inject a fixed instruction telling the agent to keep going
- *   virtual  read the last assistant message, decide whether it is waiting on
- *            the user, and if so speak one line in the user's voice
- *
- * Both stop when the agent declares `⏸ BLOCKED` or `✓ DONE`.
+ * Both the live gate and `test` stop when the agent declares `⏸ BLOCKED` or
+ * `✓ DONE` — those are explicit, readable statements and cost no model call.
  *
  * Load with:  pi -e ./src/index.ts
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { addNever, loadConfig, type MomentumConfig, originLabel, removeNever } from "./config.ts";
-import { analyzeTurnEnd, BLOCK_MARKER, continuationPrompt, DONE_MARKER } from "./detect.ts";
+import { analyzeTurnEnd, BLOCK_MARKER, DONE_MARKER } from "./detect.ts";
 import { RULES, SECTION_TAG } from "./rules.ts";
 import { buildSystemPrompt, DEFAULT_NEVER, type Decision, parseDecision } from "./virtual.ts";
 import { VERSION } from "./version.ts";
 
-const CONTINUE_CUSTOM_TYPE = "pi-momentum/continue";
-/** Every decision, dry or sent. Renders in the transcript, never enters LLM context. */
+/** Every decision, rendered in the transcript, never sent to the model. */
 const DECISION_ENTRY_TYPE = "pi-momentum/decision";
 const MAX_DEFAULT = 3;
 
+const SUBCOMMANDS = [
+	{ value: "on", label: "on", description: "reply for you when the agent stops and is waiting" },
+	{ value: "off", label: "off", description: "do nothing" },
+	{ value: "test", label: "test", description: "simulate the reply for the last message; send nothing" },
+	{ value: "never", label: "never", description: "rules the reply must never contain (list | add | rm)" },
+	{ value: "max", label: "max", description: "cap automatic replies per user turn" },
+	{ value: "prompt", label: "prompt", description: "print the virtual-user system prompt" },
+	{ value: "status", label: "status", description: "mode, version, rules" },
+];
+
+const NEVER_SUBCOMMANDS = [
+	{ value: "list", label: "list", description: "show rules with their layer" },
+	{ value: "add", label: "add", description: "append a rule (--global for the user layer)" },
+	{ value: "rm", label: "rm", description: "remove a rule from the file that declares it" },
+];
+
 interface DecisionEntry {
-	dry: boolean;
-	/** True only when the reply was actually injected as a user message. */
 	sent: boolean;
-	action: "continue" | "stop" | "skip";
+	action: "continue" | "stop";
 	reply: string;
 	reason: string;
 	/** The assistant text the decision was made on. */
 	input: string;
 	raw?: string;
-	/** Offending line, when the pre-filter skipped the call. */
-	detail?: string;
 	model?: string;
 	ms: number;
+}
+
+interface MomentumState {
+	on: boolean;
+	maxContinues: number;
+	/** Replies injected in the current user turn. */
+	continues: number;
+	config: MomentumConfig;
 }
 
 function preview(text: string, limit = 200): string {
 	const flat = text.replace(/\s+/g, " ").trim();
 	return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
 }
-
-type Mode = "off" | "nudge" | "virtual";
-
-interface MomentumState {
-	mode: Mode;
-	/** Decide but never send. */
-	dryRun: boolean;
-	maxContinues: number;
-	/** Continuations fired in the current user turn. */
-	continues: number;
-	config: MomentumConfig;
-	/** Last reply we injected, so a re-entrant prompt is not mistaken for a human. */
-	lastSentReply?: string;
-}
-
-const DEFAULT_STATE: Omit<MomentumState, "config"> = {
-	mode: "off",
-	dryRun: true,
-	maxContinues: MAX_DEFAULT,
-	continues: 0,
-};
 
 /** Text blocks of a message content value. */
 function textOf(content: unknown): string {
@@ -79,18 +77,8 @@ function textOf(content: unknown): string {
 		.join("");
 }
 
-/** Last assistant text in a projected message list (nudge mode / boundary event). */
-function lastAssistantText(messages: readonly unknown[]): string {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i] as { role?: string; content?: unknown } | undefined;
-		if (!message || message.role !== "assistant") continue;
-		return textOf(message.content);
-	}
-	return "";
-}
-
-/** Last assistant text on the current branch (virtual mode / settled event). */
-function lastAssistantTextFromBranch(ctx: ExtensionContext): string {
+/** Last assistant text on the current branch. */
+function lastAssistantText(ctx: ExtensionContext): string {
 	const branch = ctx.sessionManager.getBranch();
 	for (let i = branch.length - 1; i >= 0; i--) {
 		const entry = branch[i];
@@ -102,28 +90,21 @@ function lastAssistantTextFromBranch(ctx: ExtensionContext): string {
 	return "";
 }
 
-function statusText(state: MomentumState): string | undefined {
-	if (state.mode === "off") return undefined;
-	if (state.mode === "virtual") return `⚡ virtual ${state.continues}/${state.maxContinues}`;
-	return `⚡ nudge ${state.continues}/${state.maxContinues}`;
-}
-
 function refreshStatus(state: MomentumState, ctx: ExtensionContext): void {
-	ctx.ui.setStatus("momentum", statusText(state));
-}
-
-function stop(status: string, ctx: ExtensionContext): void {
-	ctx.ui.setStatus("momentum", `⚡ ${status}`);
+	ctx.ui.setStatus(
+		"momentum",
+		state.on ? `⚡ ${state.continues}/${state.maxContinues}` : undefined,
+	);
 }
 
 export default async function momentumExtension(pi: ExtensionAPI): Promise<void> {
-	// Only available inside Pi. Offline tests must not need it, and a renderer is
-	// a convenience: the extension works without one.
+	// Only available inside Pi. Offline tests must not need it, and the renderer
+	// is a convenience: the extension works without one.
 	const tui = (await import("@earendil-works/pi-tui").catch(() => undefined)) as
 		| { Box: new (...args: never[]) => unknown; Text: new (...args: never[]) => unknown }
 		| undefined;
 
-	const state: MomentumState = { ...DEFAULT_STATE, config: { never: [] } };
+	const state: MomentumState = { on: false, maxContinues: MAX_DEFAULT, continues: 0, config: { never: [] } };
 
 	function resolveModel(ctx: ExtensionContext) {
 		const spec = state.config.model;
@@ -138,9 +119,9 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 	}
 
 	/**
-	 * One isolated call: system prompt is the intent reader, the single user
-	 * message is the agent's last words. Nothing else of the conversation
-	 * reaches the decision.
+	 * One isolated call: the system prompt is the intent reader, the single user
+	 * message is the agent's last words. Nothing else of the conversation reaches
+	 * the decision, so it cannot inherit the question it is answering.
 	 */
 	async function askVirtualUser(
 		ctx: ExtensionContext,
@@ -169,80 +150,57 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 		return { decision: parseDecision(raw, state.config.never), raw };
 	}
 
-	// Dry-run needs a durable artifact, not a transient notify: a decision you
-	// cannot go back and read is a decision you cannot evaluate.
-	if (tui) pi.registerEntryRenderer<DecisionEntry>(DECISION_ENTRY_TYPE, (entry, { expanded }, theme) => {
-		const data = entry.data;
-		const { Box, Text } = tui as never as Record<string, never> as {
-			Box: new (a: number, b: number, c: (t: string) => string) => { addChild: (n: unknown) => void };
-			Text: new (t: string, a?: number, b?: number) => unknown;
-		};
-		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
-		const status = data.dry
-			? theme.fg("warning", "dry")
-			: data.sent
-				? theme.fg("success", "sent")
-				: theme.fg("dim", "stopped");
-		const head =
-			data.action === "continue"
-				? `${theme.bold(theme.fg("accent", "momentum"))} ${status} → ${theme.bold(`“${data.reply}”`)}`
-				: `${theme.bold(theme.fg("accent", "momentum"))} ${status} · ${data.action}`;
-		box.addChild(new Text(head, 0, 0));
-		box.addChild(
-			new Text(
-				theme.fg(
-					"dim",
-					`${data.reason || "no reason"} · ${data.ms}ms${data.model ? ` · ${data.model}` : ""}`,
+	if (tui) {
+		pi.registerEntryRenderer<DecisionEntry>(DECISION_ENTRY_TYPE, (entry, { expanded }, theme) => {
+			const data = entry.data;
+			const { Box, Text } = tui as never as Record<string, never> as {
+				Box: new (a: number, b: number, c: (t: string) => string) => { addChild: (n: unknown) => void };
+				Text: new (t: string, a?: number, b?: number) => unknown;
+			};
+			const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+			const status = data.sent ? theme.fg("success", "sent") : theme.fg("dim", "stopped");
+			const head =
+				data.action === "continue"
+					? `${theme.bold(theme.fg("accent", "momentum"))} ${status} → ${theme.bold(`“${data.reply}”`)}`
+					: `${theme.bold(theme.fg("accent", "momentum"))} ${status}`;
+			box.addChild(new Text(head, 0, 0));
+			box.addChild(
+				new Text(
+					theme.fg(
+						"dim",
+						`${data.reason || "no reason"} · ${data.ms}ms${data.model ? ` · ${data.model}` : ""}`,
+					),
+					0,
+					0,
 				),
-				0,
-				0,
-			),
-		);
-		if (expanded) {
-			box.addChild(new Text(theme.fg("muted", `in:  ${data.input}`), 0, 0));
-			if (data.detail) box.addChild(new Text(theme.fg("muted", `hit: ${data.detail}`), 0, 0));
-			if (data.raw) box.addChild(new Text(theme.fg("muted", `raw: ${data.raw}`), 0, 0));
-		}
-		return box;
-	});
+			);
+			if (expanded) {
+				box.addChild(new Text(theme.fg("muted", `in:  ${data.input}`), 0, 0));
+				if (data.raw) box.addChild(new Text(theme.fg("muted", `raw: ${data.raw}`), 0, 0));
+			}
+			return box;
+		});
+	}
 
 	pi.registerFlag("momentum", {
-		description: "pi-momentum: continue runs until the agent declares BLOCKED or DONE",
+		description: "pi-momentum: reply for the user when the agent stops and is waiting",
 		type: "boolean",
 		default: false,
 	});
 
 	pi.registerCommand("momentum", {
-		description:
-			"pi-momentum: virtual | nudge | off | dry | send | max <n> | never list|add|rm | status",
+		description: "pi-momentum: on | off | test [text] | never list|add|rm | max <n> | prompt",
 		handler: async (args, ctx) => {
 			const [verb = "status", ...rest] = args.trim().split(/\s+/);
 			const value = rest.join(" ").trim();
 
 			switch (verb) {
-				case "virtual":
-					state.mode = "virtual";
-					state.dryRun = false;
-					state.continues = 0;
-					break;
-				case "nudge":
-					state.mode = "nudge";
-					state.dryRun = false;
+				case "on":
+					state.on = true;
 					state.continues = 0;
 					break;
 				case "off":
-					state.mode = "off";
-					break;
-				case "dry":
-					state.mode = state.mode === "off" ? "virtual" : state.mode;
-					state.dryRun = true;
-					ctx.ui.notify(
-						"momentum: dry-run armed — decisions are logged the next time the agent stops. Use /momentum test for an immediate probe.",
-						"info",
-					);
-					break;
-				case "send":
-					state.dryRun = false;
+					state.on = false;
 					break;
 				case "max": {
 					const parsed = Number.parseInt(value, 10);
@@ -255,9 +213,8 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 				}
 				case "test": {
 					// No argument: simulate the reply for the conversation as it stands.
-					// This is the only way to see a decision without waiting for a stop.
 					const explicit = rest.join(" ").trim();
-					const text = explicit || lastAssistantTextFromBranch(ctx);
+					const text = explicit || lastAssistantText(ctx);
 					if (!text.trim()) {
 						ctx.ui.notify("momentum: no assistant message to test yet", "warning");
 						return;
@@ -284,20 +241,16 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 						].join("\n"),
 						"info",
 					);
-					break;
+					return;
 				}
 				case "prompt": {
 					ctx.ui.notify(buildSystemPrompt(state.config.never), "info");
-					break;
+					return;
 				}
 				case "never": {
 					const [action = "list", ...words] = rest;
-					// --repo is accepted as a synonym: the local layer is the repo layer.
 					const scope = words.includes("--global") ? "global" : "local";
-					const entry = words
-						.filter((word) => !word.startsWith("--"))
-						.join(" ")
-						.trim();
+					const entry = words.filter((word) => !word.startsWith("--")).join(" ").trim();
 
 					if (action === "add" && entry) {
 						const path = addNever(state.config, ctx.cwd, entry, scope);
@@ -314,27 +267,25 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 					}
 
 					const localLayers = state.config.layers.filter((layer) => !layer.global);
-					const lines = state.config.rules.map(
-						(rule) => `  [${originLabel(rule, ctx.cwd)}] ${rule.text}`,
-					);
+					const lines = state.config.rules.map((rule) => `  [${originLabel(rule, ctx.cwd)}] ${rule.text}`);
 					ctx.ui.notify(
 						`momentum never-rules (${localLayers.length} local layer${localLayers.length === 1 ? "" : "s"}` +
 							`${state.config.replace ? ", shallower lists replaced" : ""}):\n` +
 							(lines.length > 0 ? lines.join("\n") : "  (none — built-in defaults still apply)"),
 						"info",
 					);
-					break;
+					return;
 				}
 				default:
 					break;
 			}
+
 			refreshStatus(state, ctx);
-			const builtin = `${DEFAULT_NEVER.length} built-in`;
 			ctx.ui.notify(
-				`momentum v${VERSION}: ${state.mode}${state.dryRun ? " (dry-run, nothing is sent)" : ""} · max ${state.maxContinues} · ` +
+				`momentum v${VERSION}: ${state.on ? "on" : "off"} · max ${state.maxContinues} · ` +
 					(state.config.never.length === 0
-						? `no never-rules set (${builtin} still active)`
-						: `${state.config.never.length} never-rules + ${builtin}`),
+						? `no never-rules set (${DEFAULT_NEVER.length} built-in still active)`
+						: `${state.config.never.length} never-rules + ${DEFAULT_NEVER.length} built-in`),
 				"info",
 			);
 		},
@@ -343,16 +294,13 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 	// A real human prompt is the only thing that resets the cap. Our own injected
 	// message arrives with source "extension", so it does not clear the counter.
 	pi.on("input", async (event) => {
-		if (event.source === "interactive") {
-			state.continues = 0;
-			state.lastSentReply = undefined;
-		}
+		if (event.source === "interactive") state.continues = 0;
 	});
 
-	// Inject the contract. Even in virtual mode this pays for itself: an agent
-	// that declares BLOCKED/DONE skips the model call entirely.
+	// The contract. An agent that declares BLOCKED/DONE skips the model call
+	// entirely, so this text pays for itself.
 	pi.on("before_agent_start", async (event) => {
-		if (state.mode === "off") return;
+		if (!state.on) return;
 		const options = event.systemPromptOptions;
 		if (options?.sections) {
 			options.sections[SECTION_TAG] = RULES;
@@ -361,122 +309,90 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 		return { systemPrompt: `${event.systemPrompt}\n\n${RULES}` };
 	});
 
-	// nudge mode: fixed instruction, decided synchronously at the boundary.
-	pi.on("agent_before_settle", async (event, ctx) => {
-		if (state.mode !== "nudge") return;
-		if (event.outcome !== "completed" || !event.context.canContinue) return;
-		if (state.continues >= state.maxContinues) {
-			stop("capped", ctx);
-			return;
-		}
-
-		const text = lastAssistantText(event.context.contextMessages);
-		if (!text.trim()) return;
-
-		const analysis = analyzeTurnEnd(text);
-		if (analysis.verdict !== "continue") return;
-
-		if (state.dryRun) {
-			ctx.ui.notify(`momentum[dry]: would nudge — ${analysis.reason}`, "info");
-			return;
-		}
-
-		state.continues += 1;
-		refreshStatus(state, ctx);
-		return {
-			entries: [
-				...event.entries,
-				{
-					type: "custom_message" as const,
-					customType: CONTINUE_CUSTOM_TYPE,
-					content: continuationPrompt(analysis),
-					display: false,
-				},
-			],
-			continue: true,
-		};
-	});
-
-	// virtual mode: read the last words, speak one line in the user's voice.
 	pi.on("agent_settled", async (event, ctx) => {
-		if (state.mode !== "virtual" || event.aborted) return;
+		if (!state.on || event.aborted) return;
 		if (!ctx.isIdle()) return;
 		if (state.continues >= state.maxContinues) {
-			stop("capped", ctx);
+			ctx.ui.setStatus("momentum", "⚡ capped");
 			return;
 		}
 
-	const text = lastAssistantTextFromBranch(ctx);
+		const text = lastAssistantText(ctx);
 		if (!text.trim()) return;
 
-		const model = resolveModel(ctx)?.id;
-
-		// Cheap pre-filter: explicit BLOCKED/DONE needs no model call. In dry-run this
-		// is still reported, otherwise silence is ambiguous — did it decide, or not run?
-		const quick = analyzeTurnEnd(text);
-		if (quick.verdict !== "continue") {
-			if (state.dryRun) {
-				pi.appendEntry(DECISION_ENTRY_TYPE, {
-					dry: true,
-					sent: false,
-					action: "skip",
-					reply: "",
-					reason: `agent declared ${quick.verdict.toUpperCase()} — no model call`,
-					input: preview(text),
-					model,
-					ms: 0,
-					detail: quick.tail,
-				} satisfies DecisionEntry);
-			}
-			return;
-		}
+		// Cheap pre-filter: an explicit BLOCKED/DONE needs no model call. Nothing is
+		// logged here — nothing happened, and logging it would be noise on every
+		// finished turn.
+		if (analyzeTurnEnd(text).verdict !== "continue") return;
 
 		const startedAt = Date.now();
 		const { decision, raw } = await askVirtualUser(ctx, text);
 		const ms = Date.now() - startedAt;
-		const entry: Omit<DecisionEntry, "sent" | "dry"> = {
-			action: decision.action === "continue" && decision.reply ? "continue" : "stop",
+		const base = {
 			reply: decision.reply,
 			reason: decision.reason,
 			input: preview(text),
 			raw: raw.slice(0, 600),
-			model,
+			model: ctx.model?.id,
 			ms,
 		};
 
 		if (decision.action !== "continue" || !decision.reply) {
-			pi.appendEntry(DECISION_ENTRY_TYPE, { ...entry, dry: state.dryRun, sent: false } satisfies DecisionEntry);
-			stop(`stop: ${decision.reason || "nothing to add"}`, ctx);
-			return;
-		}
-
-		if (state.dryRun) {
-			pi.appendEntry(DECISION_ENTRY_TYPE, { ...entry, dry: true, sent: false } satisfies DecisionEntry);
-			// The entry is the durable record; this is so a decision is never
-			// invisible just because the transcript scrolled or the renderer is
-			// unavailable.
-			ctx.ui.notify(`momentum[dry] would send "${decision.reply}"`, "info");
+			pi.appendEntry(DECISION_ENTRY_TYPE, { ...base, action: "stop", sent: false } satisfies DecisionEntry);
+			ctx.ui.setStatus("momentum", `⚡ stop`);
 			return;
 		}
 
 		state.continues += 1;
-		state.lastSentReply = decision.reply;
 		refreshStatus(state, ctx);
 
 		// Written before the message so the corpus extractor can tell this user
 		// message from a human one.
-		pi.appendEntry(DECISION_ENTRY_TYPE, { ...entry, dry: false, sent: true } satisfies DecisionEntry);
+		pi.appendEntry(DECISION_ENTRY_TYPE, { ...base, action: "continue", sent: true } satisfies DecisionEntry);
 		pi.sendUserMessage(decision.reply);
 	});
 
+	// Argument completion for `/momentum `. Without it the command is a list of
+	// subcommands you have to remember.
 	pi.on("session_start", async (_event, ctx) => {
 		state.config = loadConfig(ctx.cwd);
 		refreshStatus(state, ctx);
-		const local = state.config.layers.filter((layer) => !layer.global);
-		ctx.ui.notify(
-			`pi-momentum ${state.mode}${state.dryRun ? " (dry-run)" : ""} · ${state.config.never.length} user never-rules ` +
-				`+ ${DEFAULT_NEVER.length} built-in from ${local.length} local layer${local.length === 1 ? "" : "s"}. Markers: ${BLOCK_MARKER} / ${DONE_MARKER}`,
-			"info",
-		);
+
+		ctx.ui.addAutocompleteProvider((current) => ({
+			triggerCharacters: [" "],
+			async getSuggestions(lines, cursorLine, cursorCol, options) {
+				const before = (lines[cursorLine] ?? "").slice(0, cursorCol);
+
+				const neverMatch = before.match(/^\s*\/momentum\s+never\s+(\S*)$/);
+				if (neverMatch) {
+					const prefix = neverMatch[1] ?? "";
+					return { prefix, items: NEVER_SUBCOMMANDS.filter((item) => item.value.startsWith(prefix)) };
+				}
+
+				const maxMatch = before.match(/^\s*\/momentum\s+max\s+(\S*)$/);
+				if (maxMatch) {
+					const prefix = maxMatch[1] ?? "";
+					return { prefix, items: MAX_OPTIONS.filter((item) => item.value.startsWith(prefix)) };
+				}
+
+				const argMatch = before.match(/^\s*\/momentum\s+(\S*)$/);
+				if (!argMatch) return current.getSuggestions(lines, cursorLine, cursorCol, options);
+
+				const prefix = argMatch[1] ?? "";
+				return { prefix, items: SUBCOMMANDS.filter((item) => item.value.startsWith(prefix)) };
+			},
+			applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
+				return current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
+			},
+			shouldTriggerFileCompletion(lines, cursorLine, cursorCol) {
+				return current.shouldTriggerFileCompletion?.(lines, cursorLine, cursorCol) ?? true;
+			},
+		}));
 	});
 }
+
+const MAX_OPTIONS = ["1", "2", "3", "5", "10"].map((value) => ({
+	value,
+	label: value,
+	description: "automatic replies per user turn",
+}));
