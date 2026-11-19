@@ -49,9 +49,9 @@ const SUBCOMMANDS = [
 ];
 
 const NEVER_SUBCOMMANDS = [
-	{ value: "list", label: "list", description: "show rules with their layer" },
-	{ value: "add", label: "add", description: "append a rule (--global user layer, --here exact cwd)" },
-	{ value: "rm", label: "rm", description: "remove a rule from the file that declares it" },
+	{ value: "list", label: "list", description: "show rules with their scope" },
+	{ value: "add", label: "add", description: "append a rule (--global for every directory)" },
+	{ value: "rm", label: "rm", description: "remove a rule from the scope that declares it" },
 ];
 
 interface DecisionEntry {
