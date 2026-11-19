@@ -32,6 +32,9 @@ interface Harness {
 	notifications: string[];
 	statuses: Array<string | undefined>;
 	completeCalls: number;
+	selects: number;
+	selectOptions: string[];
+	selectPick?: string;
 	/** Suggestions the autocomplete provider returns for a given editor line. */
 	suggestions: (line: string) => Promise<{ prefix: string; items: Array<{ value: string }> } | null>;
 	ctx: never;
@@ -56,7 +59,9 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 	const entries: Array<{ type: string; data: unknown }> = [];
 	const notifications: string[] = [];
 	const statuses: Array<string | undefined> = [];
-	const counters = { completeCalls: 0 };
+	const counters = { completeCalls: 0, selects: 0 };
+	const selectOptions: string[] = [];
+	const selectState: { pick?: string } = {};
 	const autocomplete: Array<(current: unknown) => unknown> = [];
 
 	const current = {
@@ -91,6 +96,12 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 		ui: {
 			notify: (message: string) => notifications.push(message),
 			setStatus: (_key: string, text: string | undefined) => statuses.push(text),
+			select: async (_title: string, options: string[]) => {
+				counters.selects += 1;
+				selectOptions.push(...options);
+				const pick = selectState.pick;
+				return pick ? options.find((option) => option.includes(pick)) : undefined;
+			},
 			addAutocompleteProvider: (factory: (current: unknown) => unknown) => autocomplete.push(factory),
 		},
 	};
@@ -129,6 +140,14 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 		statuses,
 		get completeCalls() {
 			return counters.completeCalls;
+		},
+		get selects() {
+			return counters.selects;
+		},
+		selectOptions,
+		/** What the fake picker returns: undefined cancels. */
+		set selectPick(pick: string | undefined) {
+			selectState.pick = pick;
 		},
 		suggestions: (line: string) => {
 			const provider = resolveProvider();
@@ -324,6 +343,43 @@ for (const testCase of CASES) {
 	console.log(`${raw ? "ok  " : "FAIL"}  never add --raw stores the text verbatim`);
 }
 
+// `never rm` without an argument asks which rule to drop, and only drops that one.
+{
+	const harness = await createHarness();
+	const { ctx } = harness;
+	await harness.handlers.get("session_start")!({ type: "session_start" }, ctx);
+	await harness.commands.get("momentum")!("never add --raw --global 别删库", ctx);
+	await harness.commands.get("momentum")!("never add --raw 不要碰 vendor/", ctx);
+
+	harness.selectPick = "vendor";
+	await harness.commands.get("momentum")!("never rm", ctx);
+
+	const config = loadConfig(PROJECT);
+	const picked = !config.rules.some((rule) => rule.text === "不要碰 vendor/");
+	const kept = config.rules.some((rule) => rule.text === "别删库");
+	const offered = harness.selectOptions;
+	const offeredBoth = offered.some((option) => option.startsWith("[dir]")) &&
+		offered.some((option) => option.startsWith("[global]"));
+	const ok = picked && kept && offeredBoth && harness.selects === 1;
+	if (!ok) failures++;
+	console.log(`${ok ? "ok  " : "FAIL"}  never rm without an argument offers the rules and removes the pick`);
+}
+
+// Cancelling the picker changes nothing.
+{
+	const harness = await createHarness();
+	const { ctx } = harness;
+	await harness.handlers.get("session_start")!({ type: "session_start" }, ctx);
+	await harness.commands.get("momentum")!("never add --raw 不要碰 vendor/", ctx);
+
+	await harness.commands.get("momentum")!("never rm", ctx);
+
+	const config = loadConfig(PROJECT);
+	const kept = config.rules.some((rule) => rule.text === "不要碰 vendor/");
+	if (!kept) failures++;
+	console.log(`${kept ? "ok  " : "FAIL"}  cancelling the picker removes nothing`);
+}
+
 // Autocomplete: the whole point is that `/momentum ` is discoverable.
 const probe = await createHarness();
 await probe.handlers.get("session_start")!({ type: "session_start" }, probe.ctx);
@@ -362,5 +418,5 @@ if (failures > 0) {
 	console.error(`${failures} case(s) failed`);
 	process.exit(1);
 }
-console.log(`${CASES.length + autocompleteCases.length + 3} smoke cases pass`);
+console.log(`${CASES.length + autocompleteCases.length + 5} smoke cases pass`);
 console.log(`  detector: ${analyzeTurnEnd("要我接着做这个吗？").verdict}`);

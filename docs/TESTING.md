@@ -42,6 +42,7 @@ Two scopes, one file:
 /momentum never add --raw 不要碰 vendor/   # this directory
 /momentum never add --raw --global 别删库   # every directory
 /momentum never list                        # [dir] then [global], with terms
+/momentum never rm                          # picker; cancelling changes nothing
 /momentum dirs                              # directories carrying their own rules
 ```
 

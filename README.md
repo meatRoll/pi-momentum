@@ -94,7 +94,8 @@ cannot change behaviour you cannot see.
 /momentum never add 不要碰 web 层     # this directory
 /momentum never add --global 别删库    # every directory
 /momentum never add --raw 别动 x      # skip normalisation, store the text as typed
-/momentum never rm 不要碰 web 层       # removes it from the scope that declares it
+/momentum never rm                   # pick one from a list
+/momentum never rm 不要碰 web 层       # or name it, removing it from its scope
 /momentum dirs                        # every directory with its own rules
 ```
 

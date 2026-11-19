@@ -19,6 +19,7 @@ import {
 	legacyConfigPath,
 	loadConfig,
 	type MomentumConfig,
+	type NeverRule,
 	removeNever,
 } from "./config.ts";
 import { analyzeTurnEnd, BLOCK_MARKER, DONE_MARKER } from "./detect.ts";
@@ -51,7 +52,7 @@ const SUBCOMMANDS = [
 const NEVER_SUBCOMMANDS = [
 	{ value: "list", label: "list", description: "show rules with their scope" },
 	{ value: "add", label: "add", description: "append a rule (--global for every directory)" },
-	{ value: "rm", label: "rm", description: "remove a rule from the scope that declares it" },
+	{ value: "rm", label: "rm", description: "pick a rule to remove (or pass its text)" },
 ];
 
 interface DecisionEntry {
@@ -103,6 +104,24 @@ function lastAssistantText(ctx: ExtensionContext): string {
 		return textOf(message.content);
 	}
 	return "";
+}
+
+/** Labels a rule for the picker; the scope is what makes two similar rules distinguishable. */
+function ruleLabel(rule: NeverRule): string {
+	return `[${rule.scope}] ${rule.text}` + (rule.terms?.length ? `  · ${rule.terms.join(", ")}` : "");
+}
+
+/** Ask which rule to drop. Returns the stored text, or undefined when cancelled. */
+async function pickRule(ctx: ExtensionContext, config: MomentumConfig): Promise<string | undefined> {
+	if (config.rules.length === 0) {
+		ctx.ui.notify("momentum: no rules to remove — built-in defaults are not listed here", "info");
+		return undefined;
+	}
+	const labels = config.rules.map(ruleLabel);
+	const picked = await ctx.ui.select(`Remove a never-rule (${config.rules.length})`, labels);
+	if (!picked) return undefined;
+	const index = labels.indexOf(picked);
+	return index >= 0 ? config.rules[index]?.text : undefined;
 }
 
 function refreshStatus(state: MomentumState, ctx: ExtensionContext): void {
@@ -301,13 +320,17 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 								(rule.terms?.length ? `\n  terms: ${rule.terms.join(" · ")}` : ""),
 							"info",
 						);
-					} else if (action === "rm" && entry) {
-						if (!removeNever(state.config, entry)) {
-							ctx.ui.notify(`Not in the list: ${entry}`, "warning");
+					} else if (action === "rm") {
+						// Typing the stored sentence back is the hard part, so no argument
+						// means pick it from a list.
+						const target = entry || (await pickRule(ctx, state.config));
+						if (!target) return;
+						if (!removeNever(state.config, target)) {
+							ctx.ui.notify(`Not in the list: ${target}`, "warning");
 							return;
 						}
 						state.config = loadConfig(ctx.cwd);
-						ctx.ui.notify(`momentum: removed ${entry}`, "info");
+						ctx.ui.notify(`momentum: removed "${target}"`, "info");
 					}
 
 					const lines = state.config.rules.map(
