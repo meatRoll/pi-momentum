@@ -18,6 +18,7 @@ import { readSession, type Corpus } from "./extract-corpus.ts";
 interface Row {
 	index: number;
 	verdict: Verdict;
+	question: boolean;
 	ack: boolean;
 	tail: string;
 	reply: string;
@@ -51,11 +52,17 @@ function pct(part: number, total: number): string {
 }
 
 function report(corpus: Corpus): void {
-	const rows: Row[] = corpus.turns.map((turn) => {
+	// A reply written by the virtual user is not evidence about the human. Counting
+	// it would let the gate grade its own homework.
+	const human = corpus.turns.filter((turn) => !turn.virtual);
+	const injected = corpus.turns.length - human.length;
+
+	const rows: Row[] = human.map((turn) => {
 		const analysis = analyzeTurnEnd(turn.finalText);
 		return {
 			index: turn.index,
 			verdict: analysis.verdict,
+			question: analysis.endsWithQuestion,
 			ack: turn.ack,
 			tail: analysis.tail,
 			reply: turn.userReply,
@@ -67,15 +74,13 @@ function report(corpus: Corpus): void {
 	const continued = rows.filter((row) => row.verdict === "continue");
 	const blocked = rows.filter((row) => row.verdict === "blocked");
 	const done = rows.filter((row) => row.verdict === "done");
-	const askedAtEnd = rows.filter((row) =>
-		analyzeTurnEnd(corpus.turns[row.index]!.finalText).endsWithQuestion,
-	);
+	const askedAtEnd = rows.filter((row) => row.question);
 	const askedAndAck = askedAtEnd.filter((row) => row.ack);
-	const silentAndAck = continued.filter((row) => row.ack && !askedAtEnd.includes(row));
+	const silentAndAck = continued.filter((row) => row.ack && !row.question);
 	const wasted = continued.filter((row) => row.ack);
 
 	console.log(`\nsession  ${corpus.sessionId}`);
-	console.log(`turns    ${total}\n`);
+	console.log(`turns    ${total}${injected > 0 ? `  (${injected} excluded: replies injected by pi-momentum)` : ""}\n`);
 
 	console.log("verdicts");
 	console.log(`  continue  ${String(continued.length).padStart(4)}  ${pct(continued.length, total).padStart(4)}  ${bar(continued.length, total)}`);
@@ -91,7 +96,7 @@ function report(corpus: Corpus): void {
 	console.log(
 		`\nwasted turns removable: ${wasted.length} / ${total} (${pct(wasted.length, total)})` +
 			`\n  of which the agent had asked a question anyway: ${askedAndAck.length}` +
-			`\nuser keystrokes saved:   ${wasted.length} of ${corpus.turns.filter((t) => t.ack).length} one-word replies\n`,
+			`\nuser keystrokes saved:   ${wasted.length} of ${human.filter((t) => t.ack).length} one-word replies\n`,
 	);
 
 

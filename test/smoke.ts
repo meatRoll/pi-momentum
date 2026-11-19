@@ -128,7 +128,11 @@ interface Case {
 		calls?: number;
 		/** virtual: audit entry written. */
 		audited?: boolean;
+		/** notification substring */
+		notified?: string;
 	};
+	/** Run `/momentum test <probe>` instead of the settle flow. */
+	probe?: string;
 }
 
 const CASES: Case[] = [
@@ -176,6 +180,19 @@ const CASES: Case[] = [
 		text: "⏸ BLOCKED\n要不要清掉 470MB 中间产物",
 		expect: { sent: undefined, calls: 0 },
 	},
+	{
+		name: "test command probes the decision without sending anything",
+		mode: "virtual",
+		probe: "要我接着做这个吗？",
+		expect: { sent: undefined, calls: 1, notified: "action: continue" },
+	},
+	{
+		name: "test command surfaces a guardrail rejection",
+		mode: "virtual",
+		probe: "要不要重装一下依赖包？",
+		modelReply: '{"action":"continue","reply":"重装一下依赖包","reason":"x"}',
+		expect: { sent: undefined, calls: 1, notified: "would send: no" },
+	},
 ];
 
 let failures = 0;
@@ -190,7 +207,9 @@ for (const testCase of CASES) {
 	await momentum(testCase.mode, ctx);
 
 	let continued: boolean | undefined;
-	if (testCase.mode === "nudge") {
+	if (testCase.probe) {
+		await momentum(`test ${testCase.probe}`, ctx);
+	} else if (testCase.mode === "nudge") {
 		const result = (await settle(settleEvent(testCase.text), ctx)) as { continue?: boolean } | undefined;
 		continued = result?.continue === true;
 	} else {
@@ -209,6 +228,9 @@ for (const testCase of CASES) {
 	}
 	if ("audited" in testCase.expect && (harness.entries.length > 0) !== testCase.expect.audited) {
 		problems.push(`audited=${harness.entries.length > 0}`);
+	}
+	if (testCase.expect.notified && !harness.notifications.some((line) => line.includes(testCase.expect.notified!))) {
+		problems.push(`notification missing ${JSON.stringify(testCase.expect.notified)}`);
 	}
 
 	const ok = problems.length === 0;

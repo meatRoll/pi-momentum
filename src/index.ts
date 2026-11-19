@@ -113,9 +113,12 @@ export default function momentumExtension(pi: ExtensionAPI): void {
 	 * message is the agent's last words. Nothing else of the conversation
 	 * reaches the decision.
 	 */
-	async function askVirtualUser(ctx: ExtensionContext, text: string): Promise<Decision> {
+	async function askVirtualUser(
+		ctx: ExtensionContext,
+		text: string,
+	): Promise<{ decision: Decision; raw: string }> {
 		const model = resolveModel(ctx);
-		if (!model) return { action: "stop", reply: "", reason: "no model available" };
+		if (!model) return { decision: { action: "stop", reply: "", reason: "no model available" }, raw: "" };
 
 		let raw = "";
 		try {
@@ -128,13 +131,13 @@ export default function momentumExtension(pi: ExtensionAPI): void {
 				{},
 			);
 			if (response.stopReason === "aborted" || response.stopReason === "error") {
-				return { action: "stop", reply: "", reason: `model ${response.stopReason}` };
+				return { decision: { action: "stop", reply: "", reason: `model ${response.stopReason}` }, raw };
 			}
 			raw = textOf(response.content);
 		} catch (error) {
-			return { action: "stop", reply: "", reason: `call failed: ${String(error)}` };
+			return { decision: { action: "stop", reply: "", reason: `call failed: ${String(error)}` }, raw };
 		}
-		return parseDecision(raw, state.config.never);
+		return { decision: parseDecision(raw, state.config.never), raw };
 	}
 
 	pi.registerFlag("momentum", {
@@ -178,6 +181,30 @@ export default function momentumExtension(pi: ExtensionAPI): void {
 						return;
 					}
 					state.maxContinues = parsed;
+					break;
+				}
+				case "test": {
+					const text = rest.join(" ").trim();
+					if (!text) {
+						ctx.ui.notify("Usage: /momentum test <assistant text>", "warning");
+						return;
+					}
+					const { decision, raw } = await askVirtualUser(ctx, text);
+					ctx.ui.notify(
+						[
+							"momentum test",
+							`  action: ${decision.action}`,
+							`  reply:  ${decision.reply ? `"${decision.reply}"` : "(none)"}`,
+							`  reason: ${decision.reason || "(none)"}`,
+							`  would send: ${decision.action === "continue" ? "yes" : "no"}`,
+							`  raw: ${raw.slice(0, 400).replace(/\s+/g, " ")}`,
+						].join("\n"),
+						"info",
+					);
+					break;
+				}
+				case "prompt": {
+					ctx.ui.notify(buildSystemPrompt(state.config.never), "info");
 					break;
 				}
 				case "never": {
@@ -301,29 +328,29 @@ export default function momentumExtension(pi: ExtensionAPI): void {
 
 		const decision = await askVirtualUser(ctx, text);
 
-		if (decision.action !== "continue" || !decision.reply) {
-			stop(`stop: ${decision.reason || "nothing to add"}`, ctx);
+		if (decision.decision.action !== "continue" || !decision.decision.reply) {
+			stop(`stop: ${decision.decision.reason || "nothing to add"}`, ctx);
 			return;
 		}
 
 		if (state.dryRun) {
-			ctx.ui.notify(`momentum[dry]: would reply "${decision.reply}"`, "info");
+			ctx.ui.notify(`momentum[dry]: would reply "${decision.decision.reply}"`, "info");
 			return;
 		}
 
 		state.continues += 1;
-		state.lastSentReply = decision.reply;
+		state.lastSentReply = decision.decision.reply;
 		refreshStatus(state, ctx);
 
 		// Audit trail: the transcript must stay able to tell a human from us.
 		pi.appendEntry(VIRTUAL_ENTRY_TYPE, {
-			reply: decision.reply,
-			reason: decision.reason,
+			reply: decision.decision.reply,
+			reason: decision.decision.reason,
 			model: ctx.model?.id,
 			at: Date.now(),
 		});
 
-		pi.sendUserMessage(decision.reply);
+		pi.sendUserMessage(decision.decision.reply);
 	});
 
 	pi.on("session_start", async (_event, ctx) => {

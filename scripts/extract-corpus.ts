@@ -49,11 +49,13 @@ function textOf(content: unknown): string {
 
 export function readSession(sessionPath: string): Corpus {
 	const raw = readFileSync(sessionPath, "utf8");
-	const messages: Array<{ entry: number; role: string; text: string }> = [];
+	let entry = 0;
+	const messages: Array<{ entry: number; role: string; text: string; virtual?: boolean }> = [];
+	// A virtual reply is an appendEntry() immediately before the user message.
+	let pendingVirtual = false;
 	let sessionId = basename(sessionPath).replace(/\.jsonl$/, "");
 	let cwd = "";
 
-	let entry = 0;
 	for (const line of raw.split("\n")) {
 		const trimmed = line.trim();
 		if (!trimmed) continue;
@@ -68,13 +70,19 @@ export function readSession(sessionPath: string): Corpus {
 			cwd = String(parsed.cwd ?? "");
 			continue;
 		}
+		if (parsed.type === "custom") {
+			if (parsed.customType === "pi-momentum/virtual-reply") pendingVirtual = true;
+			continue;
+		}
 		if (parsed.type !== "message") continue;
 		const message = parsed.message as { role?: string; content?: unknown } | undefined;
 		const role = message?.role;
 		if (role !== "user" && role !== "assistant") continue;
 		const text = textOf(message?.content);
 		if (!text.trim()) continue;
-		messages.push({ entry: entry++, role, text });
+		const virtual = role === "user" ? pendingVirtual : false;
+		if (role === "user") pendingVirtual = false;
+		messages.push({ entry: entry++, role, text, virtual });
 	}
 
 	const turns: CorpusTurn[] = [];
