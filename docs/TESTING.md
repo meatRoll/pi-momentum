@@ -34,21 +34,19 @@ Offline tests cover parsing, guardrails, layer folding and the gate wiring. They
 say nothing about whether the generated reply is any good — that is the whole
 point of the rest.
 
-## 2. Layer check
+## 2. Scope check
 
-Put rules at two levels and confirm the fold:
+Two scopes, one file:
 
 ```bash
-# from the repo root
-/momentum never add 不要碰 vendor/
-# from a package inside it
-cd packages/foo
-/momentum never add 不许改迁移
-/momentum never list
+/momentum never add --raw 不要碰 vendor/   # this directory
+/momentum never add --raw --global 别删库   # every directory
+/momentum never list                        # [dir] then [global], with terms
+/momentum dirs                              # directories carrying their own rules
 ```
 
-Expect both rules, the second labelled with the deeper layer. Then from
-`packages/foo/src`, the same two should still appear.
+Rules should appear only in the directory that declared them. `cd` somewhere
+else and `list` should show the global one only.
 
 ## 3. Decision cases
 

@@ -141,6 +141,23 @@ The default flips to `stop` for the same reason. In nudge mode a wrong "continue
 
 The never-list is a user-authored prefix plus a regex backstop, because substring matching does not survive paraphrase: `安装新软件或依赖` does not match `装一下新软件`. Built-in patterns cover the five categories; user entries are matched literally.
 
+## Config: why one file
+
+The first versions stored rules in `.pi/momentum.json` at every ancestor, folded
+shallow to deep. It made rules committable and gave monorepo packages their own
+scope, at the cost of "where is that rule" having N answers.
+
+Measured against actual use this was the wrong trade. Rules are edited rarely
+and read often; a single file is easier to inspect, diff and back up than files
+scattered across a filesystem, and a rule that applies to you but lives three
+directories up is a rule you cannot see. The two scopes that were actually used
+were "this directory" and "everywhere" — everything between them was theory.
+
+So: one file, two scopes, exact directory match via realpath. The monorepo case
+still works; it just means one entry per package directory rather than a file per
+package. `replace: true` stays as the escape hatch for a directory that should
+ignore the global list.
+
 ## Open questions
 
 1. **Does the contract hold on models that ignore system-prompt rules?** The gate fires regardless, so the loop is enforced, but a model that never prints the markers will burn the cap every turn.

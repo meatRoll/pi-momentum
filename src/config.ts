@@ -1,42 +1,29 @@
 /**
- * Momentum settings, layered by directory path.
+ * Momentum settings — one file, two scopes.
  *
- * Every ancestor of the working directory may own a `.pi/momentum.json`.
- * Layers are folded shallow to deep, so the nearest file wins for scalars and
- * the deepest list is the one that cannot be overridden:
+ *   ~/.pi/agent/momentum.json
  *
- *   ~/.pi/agent/momentum.json        personal, applies everywhere
- *   <root>/.pi/momentum.json         the whole project
- *   <root>/packages/foo/.pi/momentum.json    just this package
+ *   {
+ *     "global":      { "never": [...], "model": "provider/id", "maxContinues": 3 },
+ *     "directories": {
+ *       "/abs/path/to/project": { "never": [...], "replace": true }
+ *     }
+ *   }
  *
- * There is no `.git` sniffing: a layer is simply a directory that has the file.
- * A monorepo package and its root are two scopes, not one.
+ * There is exactly one directory scope: the working directory, matched exactly.
+ * No `.pi/momentum.json` files anywhere — a rule lives in one place, so "where is
+ * that rule" has one answer, and a stray file in a parent directory cannot
+ * change behaviour you cannot see.
  *
- * {
- *   "never": [
- *     "不要碰 vendor/",
- *     { "text": "不许改数据库迁移", "terms": ["数据库迁移", "迁移脚本"] }
- *   ],
- *   "replace": true,           // drop every shallower layer's list
- *   "model": "provider/modelId",
- *   "maxContinues": 3
- * }
- *
- * A rule is either a plain string (writing the rule as a person would) or an
- * object with `terms`: the phrases that, appearing in a reply, mean the rule was
- * violated. `terms` is optional — without it the terms are derived heuristically.
+ * A rule is either a plain string or `{ "text": ..., "terms": [...] }`, where
+ * `terms` are the phrases whose presence in a reply violates the rule.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
-export interface ConfigLayer {
-	/** "global" for the user file, otherwise the directory that owns it. */
-	root: string;
-	file: string;
-	global: boolean;
-}
+export type Scope = "global" | "dir";
 
 /** A rule as stored: plain text, or text plus match terms. */
 export type NeverEntry = string | { text: string; terms?: readonly string[] };
@@ -45,138 +32,131 @@ export interface NeverRule {
 	text: string;
 	/** Phrases whose presence in a reply violates the rule. */
 	terms?: string[];
-	/** Config file that declares it. */
-	file: string;
-	layer: "global" | "local";
+	/** Which scope declared it. */
+	scope: Scope;
 }
 
 export interface MomentumConfig {
-	/** Effective rules, shallowest first. */
+	/** Effective rules, global first. */
 	never: string[];
-	/** Rules with their origin, for `/momentum never list`. */
+	/** Rules with their origin. */
 	rules: NeverRule[];
-	/** True when some layer asked to drop the shallower lists. */
+	/** True when the directory scope shadows the global list. */
 	replace: boolean;
-	/** Model for the virtual-user call, as "provider/modelId". Default: active model. */
 	model?: string;
-	/** Cap on automatic continuations per user turn. */
 	maxContinues?: number;
-	/** Loaded layers, shallowest first. */
-	layers: ConfigLayer[];
-	/** Deepest local layer, when one exists. */
-	localRoot?: string;
-	globalConfigPath: string;
+	/** Absolute path of the settings file. */
+	storePath: string;
+	/** Key the directory scope is stored under. */
+	dirKey: string;
+	/** Whether this directory has an entry of its own. */
+	hasDirEntry: boolean;
 }
 
-interface RawConfig {
+interface ScopeConfig {
 	never?: unknown;
 	replace?: unknown;
 	model?: unknown;
 	maxContinues?: unknown;
 }
 
-const MAX_DEPTH = 64;
+interface StoreFile {
+	global?: ScopeConfig;
+	directories?: Record<string, ScopeConfig>;
+}
 
-export function globalConfigPath(): string {
+export function storePath(): string {
 	return join(homedir(), ".pi", "agent", "momentum.json");
 }
 
-export function layerConfigPath(dir: string): string {
-	return join(dir, ".pi", "momentum.json");
-}
-
 /**
- * Every directory from cwd up to the filesystem root that owns a config file,
- * ordered shallowest first so the caller can fold over them.
+ * The key a directory is stored under. Realpath so a symlinked or case-folded
+ * path does not create a second entry for the same place.
  */
-export function findLocalLayers(cwd: string): Array<{ root: string; file: string }> {
-	const found: Array<{ root: string; file: string }> = [];
-	let current = resolve(cwd);
-	for (let depth = 0; depth < MAX_DEPTH; depth++) {
-		const file = layerConfigPath(current);
-		if (existsSync(file)) found.push({ root: current, file });
-		const parent = dirname(current);
-		if (parent === current) break;
-		current = parent;
+export function dirKey(cwd: string): string {
+	const absolute = resolve(cwd);
+	try {
+		return realpathSync(absolute);
+	} catch {
+		return absolute;
 	}
-	return found.reverse();
 }
 
-function readRaw(path: string): RawConfig {
+function readStore(path: string): StoreFile {
+	if (!existsSync(path)) return {};
 	try {
-		return JSON.parse(readFileSync(path, "utf8")) as RawConfig;
+		return (JSON.parse(readFileSync(path, "utf8")) as StoreFile) ?? {};
 	} catch {
 		return {};
 	}
+}
+
+/** Write via a temp file so a crash cannot truncate the only copy of the rules. */
+function writeStore(path: string, store: StoreFile): void {
+	mkdirSync(dirname(path), { recursive: true });
+	const payload = `${JSON.stringify(store, null, 2)}\n`;
+	const temp = `${path}.tmp`;
+	writeFileSync(temp, payload);
+	renameSync(temp, path);
 }
 
 function strings(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
-/** Normalise the many shapes `never` can be written in. */
-export function neverEntries(value: unknown): NeverRule[] {
+/** Normalise the many shapes a rule can be written in. */
+export function neverEntries(value: unknown): Array<{ text: string; terms?: string[] }> {
 	if (!Array.isArray(value)) return [];
-	const out: NeverRule[] = [];
+	const out: Array<{ text: string; terms?: string[] }> = [];
 	for (const item of value) {
 		if (typeof item === "string") {
-			if (item.trim()) out.push({ text: item.trim(), file: "", layer: "local" });
+			if (item.trim()) out.push({ text: item.trim() });
 			continue;
 		}
 		if (!item || typeof item !== "object") continue;
 		const { text, terms } = item as { text?: unknown; terms?: unknown };
 		if (typeof text !== "string" || !text.trim()) continue;
-		const parsedTerms = strings(terms).map((term) => term.trim()).filter(Boolean);
-		out.push({
-			text: text.trim(),
-			...(parsedTerms.length > 0 ? { terms: parsedTerms } : {}),
-			file: "",
-			layer: "local",
-		});
+		const parsed = strings(terms).map((term) => term.trim()).filter(Boolean);
+		out.push({ text: text.trim(), ...(parsed.length > 0 ? { terms: parsed } : {}) });
 	}
 	return out;
 }
 
-/** Fold the layers shallow to deep. */
+function collect(value: unknown, scope: Scope, rules: NeverRule[]): void {
+	for (const declared of neverEntries(value)) {
+		const key = declared.text.trim().toLowerCase();
+		if (!key) continue;
+		const existing = rules.findIndex((rule) => rule.text.trim().toLowerCase() === key);
+		// The directory scope owns a duplicate and keeps its position.
+		const rule: NeverRule = { ...declared, scope };
+		if (existing >= 0) rules[existing] = rule;
+		else rules.push(rule);
+	}
+}
+
 export function loadConfig(cwd: string): MomentumConfig {
-	const globalFile = globalConfigPath();
-	const layers: ConfigLayer[] = [{ root: "global", file: globalFile, global: true }];
-	const local = findLocalLayers(cwd);
-	for (const entry of local) layers.push({ root: entry.root, file: entry.file, global: false });
+	const path = storePath();
+	const store = readStore(path);
+	const key = dirKey(cwd);
+	const dir = store.directories?.[key];
 
 	const rules: NeverRule[] = [];
-	let replace = false;
-	let model: string | undefined;
-	let maxContinues: number | undefined;
+	const replace = dir?.replace === true;
+	if (!replace) collect(store.global?.never, "global", rules);
+	collect(dir?.never, "dir", rules);
 
-	for (const layer of layers) {
-		if (!existsSync(layer.file)) continue;
-		const raw = readRaw(layer.file);
-
-		// A layer that sets replace: true discards everything shallower.
-		if (raw.replace === true) {
-			rules.length = 0;
-			replace = true;
-		}
-
-		for (const declared of neverEntries(raw.never)) {
-			const key = declared.text.trim().toLowerCase();
-			if (!key) continue;
-			const existing = rules.findIndex((rule) => rule.text.trim().toLowerCase() === key);
-			const rule: NeverRule = {
-				text: declared.text,
-				...(declared.terms ? { terms: declared.terms } : {}),
-				file: layer.file,
-				layer: layer.global ? "global" : "local",
-			};
-			// Deeper declarations take ownership of a duplicate, keeping its position.
-			if (existing >= 0) rules[existing] = rule;
-			else rules.push(rule);
-		}
-
-		if (typeof raw.model === "string") model = raw.model;
-		if (typeof raw.maxContinues === "number") maxContinues = raw.maxContinues;
-	}
+	const model =
+		typeof dir?.model === "string"
+			? dir.model
+			: typeof store.global?.model === "string"
+				? store.global.model
+				: undefined;
+	const maxContinues =
+		typeof dir?.maxContinues === "number"
+			? dir.maxContinues
+			: typeof store.global?.maxContinues === "number"
+				? store.global.maxContinues
+				: undefined;
 
 	return {
 		never: rules.map((rule) => rule.text),
@@ -184,72 +164,54 @@ export function loadConfig(cwd: string): MomentumConfig {
 		replace,
 		model,
 		maxContinues,
-		layers,
-		localRoot: local.at(-1)?.root,
-		globalConfigPath: globalFile,
+		storePath: path,
+		dirKey: key,
+		hasDirEntry: Boolean(dir),
 	};
 }
 
-/** Short label for a rule's origin: "global", the relative directory, or `…/name` when it escapes the cwd. */
-export function originLabel(rule: NeverRule, cwd: string): string {
-	if (rule.layer === "global") return "global";
-	const dir = dirname(dirname(rule.file));
-	const rel = relative(cwd, dir);
-	if (!rel) return ".";
-	if (!rel.startsWith("..")) return rel;
-	return `…/${basename(dir)}`;
+function scopeOf(store: StoreFile, key: string, scope: Scope): ScopeConfig {
+	if (scope === "global") return (store.global ??= {});
+	store.directories ??= {};
+	return (store.directories[key] ??= {});
 }
 
-/** Read-modify-write a config file, preserving keys this extension does not own. */
-/** Write the raw `never` array, preserving every other key in the file. */
-export function writeNever(path: string, never: unknown[]): void {
-	const existing = existsSync(path) ? (readRaw(path) as Record<string, unknown>) : {};
-	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, `${JSON.stringify({ ...existing, never }, null, 2)}\n`);
+/** Append a rule to one scope. Returns the path written. */
+export function addNever(config: MomentumConfig, entry: NeverEntry, scope: Scope): string {
+	const store = readStore(config.storePath);
+	const target = scopeOf(store, config.dirKey, scope);
+	const existing = Array.isArray(target.never) ? (target.never as unknown[]) : [];
+	target.never = [...existing, entry];
+	writeStore(config.storePath, store);
+	return config.storePath;
 }
 
-/** The file's `never` value exactly as stored, so rewrites keep its shapes. */
-function readRawNever(path: string): unknown[] {
-	return existsSync(path) ? (Array.isArray(readRaw(path).never) ? (readRaw(path).never as unknown[]) : []) : [];
-}
-
-function ruleText(item: unknown): string | undefined {
-	if (typeof item === "string") return item.trim() || undefined;
-	if (item && typeof item === "object") {
-		const { text } = item as { text?: unknown };
-		if (typeof text === "string" && text.trim()) return text.trim();
-	}
-	return undefined;
-}
-
-/**
- * Where a new rule goes: the deepest local layer, or the working directory when
- * no layer exists yet. Pure path semantics — any directory can own a layer.
- */
-export function localTarget(config: MomentumConfig, cwd: string, exact = false): string {
-	if (exact) return layerConfigPath(resolve(cwd));
-	return config.localRoot ? layerConfigPath(config.localRoot) : layerConfigPath(resolve(cwd));
-}
-
-export function addNever(
-	config: MomentumConfig,
-	cwd: string,
-	entry: NeverEntry,
-	scope: "global" | "local",
-	exact = false,
-): string {
-	const path = scope === "global" ? config.globalConfigPath : localTarget(config, cwd, exact);
-	writeNever(path, [...readRawNever(path), entry]);
-	return path;
-}
-
-/** Remove a rule from the file that declares it. */
-export function removeNever(config: MomentumConfig, text: string): string | undefined {
+/** Remove a rule from the scope that declares it. */
+export function removeNever(config: MomentumConfig, text: string): boolean {
 	const rule = config.rules.find((item) => item.text === text);
-	if (!rule) return undefined;
-	writeNever(
-		rule.file,
-		readRawNever(rule.file).filter((item) => ruleText(item) !== text),
-	);
-	return rule.file;
+	if (!rule) return false;
+	const store = readStore(config.storePath);
+	const target = scopeOf(store, config.dirKey, rule.scope);
+	const kept = (Array.isArray(target.never) ? (target.never as unknown[]) : []).filter((item) => {
+		const declared = neverEntries([item])[0];
+		return declared?.text !== text;
+	});
+	target.never = kept;
+	writeStore(config.storePath, store);
+	return true;
+}
+
+/** Directories with their own rules, for `/momentum dirs`. */
+export function listDirectories(config: MomentumConfig): Array<{ key: string; rules: number }> {
+	const store = readStore(config.storePath);
+	return Object.entries(store.directories ?? {}).map(([key, value]) => ({
+		key,
+		rules: neverEntries(value?.never).length,
+	}));
+}
+
+/** A legacy per-directory file, if one is still sitting in the working directory. */
+export function legacyConfigPath(cwd: string): string | undefined {
+	const path = join(resolve(cwd), ".pi", "momentum.json");
+	return existsSync(path) ? path : undefined;
 }

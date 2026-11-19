@@ -13,7 +13,14 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { addNever, loadConfig, type MomentumConfig, originLabel, removeNever } from "./config.ts";
+import {
+	addNever,
+	listDirectories,
+	legacyConfigPath,
+	loadConfig,
+	type MomentumConfig,
+	removeNever,
+} from "./config.ts";
 import { analyzeTurnEnd, BLOCK_MARKER, DONE_MARKER } from "./detect.ts";
 import { RULES, SECTION_TAG } from "./rules.ts";
 import {
@@ -35,6 +42,7 @@ const SUBCOMMANDS = [
 	{ value: "off", label: "off", description: "do nothing" },
 	{ value: "test", label: "test", description: "simulate the reply for the last message; send nothing" },
 	{ value: "never", label: "never", description: "rules the reply must never contain (list | add | rm)" },
+	{ value: "dirs", label: "dirs", description: "directories with their own rules" },
 	{ value: "max", label: "max", description: "cap automatic replies per user turn" },
 	{ value: "prompt", label: "prompt", description: "print the virtual-user system prompt" },
 	{ value: "status", label: "status", description: "mode, version, rules" },
@@ -280,39 +288,48 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 				}
 				case "never": {
 					const [action = "list", ...words] = rest;
-					const scope = words.includes("--global") ? "global" : "local";
-					const exact = words.includes("--here");
+					const scope = words.includes("--global") ? "global" : "dir";
 					const entry = words.filter((word) => !word.startsWith("--")).join(" ").trim();
 
 					if (action === "add" && entry) {
 						const rule = words.includes("--raw") ? { text: entry } : await normaliseRule(ctx, entry);
-						const path = addNever(state.config, ctx.cwd, rule, scope, exact);
+						addNever(state.config, rule, scope);
 						state.config = loadConfig(ctx.cwd);
 						ctx.ui.notify(
-							`momentum: wrote ${path}\n  rule:  ${rule.text}` +
+							`momentum: wrote ${state.config.storePath} [${scope === "global" ? "global" : state.config.dirKey}]\n` +
+								`  rule:  ${rule.text}` +
 								(rule.terms?.length ? `\n  terms: ${rule.terms.join(" · ")}` : ""),
 							"info",
 						);
 					} else if (action === "rm" && entry) {
-						const path = removeNever(state.config, entry);
-						if (!path) {
+						if (!removeNever(state.config, entry)) {
 							ctx.ui.notify(`Not in the list: ${entry}`, "warning");
 							return;
 						}
 						state.config = loadConfig(ctx.cwd);
-						ctx.ui.notify(`momentum: removed from ${path}`, "info");
+						ctx.ui.notify(`momentum: removed ${entry}`, "info");
 					}
 
-					const localLayers = state.config.layers.filter((layer) => !layer.global);
 					const lines = state.config.rules.map(
 						(rule) =>
-							`  [${originLabel(rule, ctx.cwd)}] ${rule.text}` +
+							`  [${rule.scope}] ${rule.text}` +
 							(rule.terms?.length ? `\n      ↳ ${rule.terms.join(" · ")}` : ""),
 					);
 					ctx.ui.notify(
-						`momentum never-rules (${localLayers.length} local layer${localLayers.length === 1 ? "" : "s"}` +
-							`${state.config.replace ? ", shallower lists replaced" : ""}):\n` +
+						`momentum never-rules — dir ${state.config.dirKey}` +
+							`${state.config.replace ? " (directory rules replace global)" : ""}:\n` +
 							(lines.length > 0 ? lines.join("\n") : "  (none — built-in defaults still apply)"),
+						"info",
+					);
+					return;
+				}
+				case "dirs": {
+					const dirs = listDirectories(state.config);
+					ctx.ui.notify(
+						`momentum directories (${dirs.length}) — ${state.config.storePath}\n` +
+							(dirs.length > 0
+								? dirs.map((dir) => `  ${dir.key}  (${dir.rules} rules)`).join("\n")
+								: "  (none)"),
 						"info",
 					);
 					return;
@@ -439,8 +456,7 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 }
 
 const NEVER_FLAGS = [
-	{ value: "--global", label: "--global", description: "write to ~/.pi/agent/momentum.json" },
-	{ value: "--here", label: "--here", description: "write to ./.pi/momentum.json, ignoring other layers" },
+	{ value: "--global", label: "--global", description: "apply to every directory" },
 	{ value: "--raw", label: "--raw", description: "store the sentence as typed, skip normalisation" },
 ];
 

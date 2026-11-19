@@ -329,12 +329,12 @@ const probe = await createHarness();
 await probe.handlers.get("session_start")!({ type: "session_start" }, probe.ctx);
 
 const autocompleteCases: Array<{ line: string; expect: string[] }> = [
-	{ line: "/momentum ", expect: ["on", "off", "test", "never", "max", "prompt", "status"] },
+	{ line: "/momentum ", expect: ["on", "off", "test", "never", "dirs", "max", "prompt", "status"] },
 	{ line: "/momentum ne", expect: ["never"] },
 	{ line: "/momentum never ", expect: ["list", "add", "rm"] },
 	{ line: "/momentum never a", expect: ["add"] },
 	{ line: "/momentum never add ", expect: [] },
-	{ line: "/momentum never add --", expect: ["--global", "--here", "--raw"] },
+	{ line: "/momentum never add --", expect: ["--global", "--raw"] },
 	{ line: "/momentum never add --g", expect: ["--global"] },
 	{ line: "/momentum max ", expect: ["1", "2", "3", "5", "10"] },
 	{ line: "/momentum zz", expect: [] },

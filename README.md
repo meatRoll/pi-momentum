@@ -68,45 +68,40 @@ without waiting for a real stop.
 
 ### Never-list
 
-The virtual user must not authorize things you never want. It is a hard prefix in the prompt *and* a regex guardrail applied to the generated reply.
+The virtual user must not authorize things you never want. A rule is a hard
+prefix in the prompt *and* a guardrail applied to the generated reply.
 
-Rules are scoped by **directory path**. Every ancestor of the working directory may own a `.pi/momentum.json`, and they fold shallow to deep:
+Everything lives in **one file**, with exactly two scopes:
 
 ```
-~/.pi/agent/momentum.json                  personal, applies everywhere
-<project>/.pi/momentum.json                the whole project
-<project>/packages/foo/.pi/momentum.json   just this package
-```
+~/.pi/agent/momentum.json
 
-```json
 {
-  "never": ["不要碰 vendor/", "不许改数据库迁移"],
-  "replace": false
+  "global": { "never": ["别删库"], "model": "provider/id", "maxContinues": 3 },
+  "directories": {
+    "/abs/path/to/project": { "never": ["不要碰 vendor/"], "replace": false }
+  }
 }
 ```
 
-There is no `.git` sniffing: a layer is simply a directory that has the file. That is what makes a monorepo work — `packages/a` and `packages/b` are separate scopes, not one repository-wide blob.
-
-Lists merge shallow to deep, so a package adding its own rules never silently drops `别删数据` from above. A layer that sets `"replace": true` discards every shallower list; everything below it still accumulates. Duplicates stay where they first appeared but belong to the deepest layer that declares them.
-
-Scalars (`model`, `maxContinues`) take the deepest value.
+The directory scope is the working directory, matched exactly (realpath, so a
+symlink does not create a second entry). No `.pi/momentum.json` files anywhere:
+one place to look, one place to edit, and a stray file in a parent directory
+cannot change behaviour you cannot see.
 
 ```bash
-/momentum never list                  # shows [global] / [dir] per rule, and terms
-/momentum never add 不要碰 web 层     # nearest existing layer, else cwd
-/momentum never add --global 别删库    # the user file, every project
-/momentum never add --here 别删数据    # exactly ./.pi/momentum.json
+/momentum never list                  # [global] / [dir] per rule, plus terms
+/momentum never add 不要碰 web 层     # this directory
+/momentum never add --global 别删库    # every directory
 /momentum never add --raw 别动 x      # skip normalisation, store the text as typed
-/momentum never rm 不要碰 web 层       # edits the file that declares it
+/momentum never rm 不要碰 web 层       # removes it from the scope that declares it
+/momentum dirs                        # every directory with its own rules
 ```
 
-Where a rule lands:
-
-| flag | target |
-|---|---|
-| none | the nearest `.pi/momentum.json` above the cwd; if there is none, `./.pi/momentum.json` |
-| `--here` | `./.pi/momentum.json`, even when a layer exists above |
-| `--global` | `~/.pi/agent/momentum.json` |
+Global rules apply first, then the directory's. `"replace": true` in a directory
+entry drops the global list for that directory. A duplicate is owned by the
+directory scope. Scalars (`model`, `maxContinues`) fall back from directory to
+global.
 
 `add` runs one model call to turn the sentence into match terms. You write
 "别让它在没问我之前就跑数据库迁移"; it stores
@@ -120,11 +115,18 @@ against. Neither is derived from the other, which is why a rule written the way
 a person writes rules still fires. `--raw` keeps the sentence and falls back to
 the heuristic stripper.
 
-Rules are matched after stripping the prohibition and the verb, so `不许改数据库迁移` blocks a reply saying `改数据库迁移` — matching the literal would never fire. A comma-separated rule splits into separate terms. Over-blocking is the intended failure direction here: a rejected reply is silence, a missed one is a fabricated instruction.
+Rules without terms are matched after stripping the prohibition and the verb, so
+`不许改数据库迁移` blocks a reply saying `改数据库迁移` — the literal would never
+fire. A comma-separated rule splits into separate terms. Over-blocking is the
+intended failure direction: a rejected reply is silence, a missed one is a
+fabricated instruction.
 
-Built-in patterns cover five default categories (install software, delete/overwrite data, publish/deploy/push, change system config, pay for things) even when every layer is empty.
+Built-in patterns cover five default categories (install software,
+delete/overwrite data, publish/deploy/push, change system config, pay for things)
+even when every list is empty.
 
-Config keys, every layer: `never`, `replace`, `model`, `maxContinues`.
+If a `.pi/momentum.json` is sitting in the working directory from an older
+version, the extension says so on startup and ignores it.
 
 ## Safety
 
@@ -184,12 +186,12 @@ npm run analyze -- --session <session.jsonl>
 ```
 src/detect.ts    turn-end analysis, marker parsing (pure, no Pi imports)
 src/virtual.ts   virtual-user prompt, decision parsing, reply guardrails (pure)
-src/config.ts    never-list + model settings, global and project scopes
+src/config.ts    never-list + model settings, one file, global and directory scopes
 src/rules.ts     system prompt contract
 src/index.ts     the extension: modes, gate, cap, commands
 scripts/         corpus extraction + offline scoring
 test/smoke.ts    fake ExtensionAPI harness, no Pi boot required
 test/virtual.ts  decision parsing and guardrail cases
-fixtures/        origin session transcript + derived evidence corpus
+fixtures/        synthetic evidence corpus (real transcripts stay private)
 docs/DESIGN.md   evidence, rule derivation, open questions
 ```

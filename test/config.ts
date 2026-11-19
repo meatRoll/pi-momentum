@@ -1,54 +1,43 @@
 /**
- * Config layer cases: path discovery, folding, replace, add/remove.
+ * Config store cases: one file, two scopes, exact directory match.
  *
  *   node --experimental-strip-types test/config.ts
  *
- * Runs against a throwaway HOME and throwaway directories, so nothing touches
- * the real ~/.pi/agent. No .git is created anywhere: layers are pure paths.
+ * Runs against a throwaway HOME, so nothing touches the real ~/.pi/agent.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	addNever,
-	findLocalLayers,
-	globalConfigPath,
-	layerConfigPath,
+	dirKey,
+	legacyConfigPath,
+	listDirectories,
 	loadConfig,
-	originLabel,
 	removeNever,
+	storePath,
 } from "../src/config.ts";
 
-const root = mkdtempSync(join(tmpdir(), "pi-momentum-layers-"));
-process.env.HOME = join(root, "home");
+const ROOT = mkdtempSync(join(tmpdir(), "pi-momentum-store-"));
+process.env.HOME = join(ROOT, "home");
+mkdirSync(join(ROOT, "home", ".pi", "agent"), { recursive: true });
 
-const project = join(root, "project");
-const pkg = join(project, "packages", "foo");
-const nested = join(pkg, "src");
-for (const dir of [nested, join(root, "home", ".pi", "agent")]) mkdirSync(dir, { recursive: true });
+const A = join(ROOT, "alpha");
+const B = join(ROOT, "beta");
+for (const dir of [A, B]) mkdirSync(dir, { recursive: true });
 
-function writeJson(path: string, value: unknown): void {
-	mkdirSync(join(path, "..", ".."), { recursive: true });
-	writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+interface Store {
+	global?: { never?: unknown[]; model?: string; maxContinues?: number };
+	directories?: Record<string, { never?: unknown[]; replace?: boolean; model?: string }>;
 }
 
-function writeLayer(dir: string, value: unknown): void {
-	mkdirSync(join(dir, ".pi"), { recursive: true });
-	writeJson(layerConfigPath(dir), value);
+function readStore(): Store {
+	return JSON.parse(readFileSync(storePath(), "utf8")) as Store;
 }
 
-function readLayer(dir: string): { never?: string[]; model?: string } {
-	return JSON.parse(readFileSync(layerConfigPath(dir), "utf8")) as { never?: string[]; model?: string };
-}
-
-function reset(): void {
-	writeJson(globalConfigPath(), { never: [] });
-	writeLayer(project, { never: [] });
-	writeLayer(pkg, { never: [] });
-	// Tests may create a layer at the working directory itself; leaving it behind
-	// makes it the deepest layer for every later test.
-	if (existsSync(layerConfigPath(nested))) rmSync(layerConfigPath(nested));
+function reset(store: Store = {}): void {
+	writeFileSync(storePath(), JSON.stringify(store, null, 2));
 }
 
 interface Case {
@@ -58,202 +47,189 @@ interface Case {
 
 const cases: Case[] = [
 	{
-		name: "a layer is a directory with .pi/momentum.json, no .git needed",
+		name: "no store file means no rules",
 		run: () => {
-			reset();
-			const dirs = findLocalLayers(nested).map((layer) => layer.root);
-			return dirs.includes(project) && dirs.includes(pkg);
+		const config = loadConfig(A);
+		return config.never.length === 0 && config.hasDirEntry === false;
+	},
+	},
+	{
+		name: "storePath is the single file under $HOME",
+		run: () => storePath() === join(ROOT, "home", ".pi", "agent", "momentum.json"),
+	},
+	{
+		name: "global rules apply to every directory",
+		run: () => {
+			reset({ global: { never: ["g"] } });
+			return loadConfig(A).never.includes("g") && loadConfig(B).never.includes("g");
 		},
 	},
 	{
-		name: "layers are ordered shallowest first",
+		name: "directory rules apply to that directory only",
 		run: () => {
-			reset();
-			const dirs = findLocalLayers(nested).map((layer) => layer.root);
-			return dirs.indexOf(project) < dirs.indexOf(pkg);
+			reset({ directories: { [dirKey(A)]: { never: ["only-a"] } } });
+			return loadConfig(A).never.includes("only-a") && !loadConfig(B).never.includes("only-a");
 		},
 	},
 	{
-		name: "deep and shallow lists merge",
+		name: "directory rules follow the global ones",
 		run: () => {
-			reset();
-			writeLayer(project, { never: ["root-rule"] });
-			writeLayer(pkg, { never: ["pkg-rule"] });
-			const config = loadConfig(nested);
-			return JSON.stringify(config.never) === JSON.stringify(["root-rule", "pkg-rule"]);
+			reset({
+				global: { never: ["g"] },
+				directories: { [dirKey(A)]: { never: ["d"] } },
+			});
+			return JSON.stringify(loadConfig(A).never) === JSON.stringify(["g", "d"]);
 		},
 	},
 	{
-		name: "global list sits below every local layer",
+		name: "replace: true drops the global list",
 		run: () => {
-			reset();
-			writeJson(globalConfigPath(), { never: ["global-rule"] });
-			writeLayer(pkg, { never: ["pkg-rule"] });
-			const config = loadConfig(nested);
-			return JSON.stringify(config.never) === JSON.stringify(["global-rule", "pkg-rule"]);
+			reset({
+				global: { never: ["g"] },
+				directories: { [dirKey(A)]: { never: ["d"], replace: true } },
+			});
+			const config = loadConfig(A);
+			return JSON.stringify(config.never) === JSON.stringify(["d"]) && config.replace === true;
 		},
 	},
 	{
-		name: "originLabel names the layer directory",
+		name: "a duplicate is owned by the directory scope",
 		run: () => {
-			reset();
-			writeJson(globalConfigPath(), { never: ["g"] });
-			writeLayer(pkg, { never: ["p"] });
-			const config = loadConfig(nested);
-			const labels = config.rules.map((rule) => originLabel(rule, nested));
-			return labels[0] === "global" && labels[1] === "…/foo";
-		},
-	},
-	{
-		name: "deeper scalar wins",
-		run: () => {
-			reset();
-			writeJson(globalConfigPath(), { model: "p/global" });
-			writeLayer(project, { model: "p/root" });
-			writeLayer(pkg, { model: "p/deep" });
-			return loadConfig(nested).model === "p/deep";
-		},
-	},
-	{
-		name: "a deep replace:true drops the shallower lists",
-		run: () => {
-			reset();
-			writeJson(globalConfigPath(), { never: ["g"] });
-			writeLayer(project, { never: ["root"] });
-			writeLayer(pkg, { never: ["pkg"], replace: true });
-			const config = loadConfig(nested);
-			return JSON.stringify(config.never) === JSON.stringify(["pkg"]) && config.replace === true;
-		},
-	},
-	{
-		name: "duplicates are owned by the deeper layer, position kept",
-		run: () => {
-			reset();
-			writeLayer(project, { never: ["同一个", "root-only"] });
-			writeLayer(pkg, { never: ["同一个"] });
-			const config = loadConfig(nested);
-			return JSON.stringify(config.never) === JSON.stringify(["同一个", "root-only"]) &&
-				config.rules[0]?.file === layerConfigPath(pkg);
-		},
-	},
-	{
-		name: "a directory outside the chain contributes nothing",
-		run: () => {
-			reset();
-			const other = join(root, "other");
-			writeLayer(other, { never: ["other-rule"] });
-			return !loadConfig(nested).never.includes("other-rule");
-		},
-	},
-	{
-		name: "addNever with no layer yet writes the working directory",
-		run: () => {
-			reset();
-			const lonely = join(root, "lonely");
-			mkdirSync(lonely, { recursive: true });
-			const path = addNever(loadConfig(lonely), lonely, "new-rule", "local");
-			return path === layerConfigPath(lonely) && readLayer(lonely).never?.includes("new-rule") === true;
-		},
-	},
-	{
-		name: "addNever targets the deepest existing layer",
-		run: () => {
-			reset();
-			const path = addNever(loadConfig(nested), nested, "pkg-rule", "local");
-			return path === layerConfigPath(pkg) && readLayer(pkg).never?.includes("pkg-rule") === true;
-		},
-	},
-	{
-		name: "--here writes the working directory even when a layer exists above",
-		run: () => {
-			reset();
-			writeLayer(project, { never: ["root"] });
-			const path = addNever(loadConfig(nested), nested, "here-rule", "local", true);
-			return path === layerConfigPath(nested) && readLayer(nested).never?.includes("here-rule") === true;
-		},
-	},
-	{
-		name: "without --here the nearest existing layer wins",
-		run: () => {
-			reset();
-			// Only the project layer exists, so that is where the rule belongs.
-			rmSync(layerConfigPath(pkg));
-			const path = addNever(loadConfig(nested), nested, "root-rule", "local");
-			return path === layerConfigPath(project);
-		},
-	},
-	{
-		name: "addNever --global never touches a local layer",
-		run: () => {
-			reset();
-			const path = addNever(loadConfig(nested), nested, "personal", "global");
-			const global = JSON.parse(readFileSync(globalConfigPath(), "utf8")) as { never: string[] };
-			return (
-				path === globalConfigPath() &&
-				global.never.includes("personal") &&
-				(readLayer(pkg).never ?? []).includes("personal") === false
-			);
-		},
-	},
-	{
-		name: "addNever preserves keys it does not own",
-		run: () => {
-			reset();
-			writeLayer(pkg, { never: ["a"], model: "p/m" });
-			addNever(loadConfig(nested), nested, "b", "local");
-			const written = readLayer(pkg) as { never?: string[]; model?: string };
-			return JSON.stringify(written.never) === JSON.stringify(["a", "b"]) && written.model === "p/m";
-		},
-	},
-	{
-		name: "removeNever edits the file that declares the rule",
-		run: () => {
-			reset();
-			writeLayer(project, { never: ["root-rule"] });
-			writeLayer(pkg, { never: ["pkg-rule"] });
-			const path = removeNever(loadConfig(nested), "root-rule");
-			return path === layerConfigPath(project) &&
-				(readLayer(project).never ?? []).length === 0 &&
-				JSON.stringify(readLayer(pkg).never) === JSON.stringify(["pkg-rule"]);
+			reset({
+				global: { never: ["same"] },
+				directories: { [dirKey(A)]: { never: ["same"] } },
+			});
+			const config = loadConfig(A);
+			return config.never.length === 1 && config.rules[0]?.scope === "dir";
 		},
 	},
 	{
 		name: "a rule can carry explicit match terms",
 		run: () => {
-			reset();
-			writeLayer(pkg, { never: [{ text: "不许改迁移", terms: ["数据库迁移", "迁移脚本"] }] });
-			const rule = loadConfig(nested).rules[0];
-			return rule?.text === "不许改迁移" && JSON.stringify(rule.terms) === JSON.stringify(["数据库迁移", "迁移脚本"]);
+			reset({ global: { never: [{ text: "不许改迁移", terms: ["数据库迁移"] }] } });
+			const rule = loadConfig(A).rules[0];
+			return rule?.text === "不许改迁移" && JSON.stringify(rule.terms) === JSON.stringify(["数据库迁移"]);
 		},
 	},
 	{
-		name: "adding an object keeps the plain strings around it",
+		name: "scalars fall back from directory to global",
 		run: () => {
-			reset();
-			writeLayer(pkg, { never: ["plain"] });
-			addNever(loadConfig(nested), nested, { text: "给了词的", terms: ["甲", "乙"] }, "local");
-			const raw = JSON.parse(readFileSync(layerConfigPath(pkg), "utf8")) as { never: unknown[] };
-			const shapes = raw.never.map((item) => (typeof item === "string" ? "string" : "object"));
-			return JSON.stringify(shapes) === JSON.stringify(["string", "object"]);
+			reset({ global: { model: "p/global", maxContinues: 2 } });
+			const globalOnly = loadConfig(B);
+			reset({
+				global: { model: "p/global", maxContinues: 2 },
+				directories: { [dirKey(A)]: { never: [], model: "p/dir" } },
+			});
+			const dir = loadConfig(A);
+			return globalOnly.model === "p/global" && dir.model === "p/dir" && dir.maxContinues === 2;
 		},
 	},
 	{
-		name: "removing by text drops an object rule",
+		name: "addNever without a flag writes the directory scope",
 		run: () => {
 			reset();
-			writeLayer(pkg, { never: [{ text: "对象规则", terms: ["甲"] }, "普通规则"] });
-			removeNever(loadConfig(nested), "对象规则");
-			const raw = JSON.parse(readFileSync(layerConfigPath(pkg), "utf8")) as { never: unknown[] };
-			return JSON.stringify(raw.never) === JSON.stringify(["普通规则"]);
+			addNever(loadConfig(A), "dir-rule", "dir");
+			const store = readStore();
+			return JSON.stringify(store.directories?.[dirKey(A)]?.never) === JSON.stringify(["dir-rule"]) &&
+				store.global === undefined;
 		},
 	},
 	{
-		name: "a broken layer file does not throw",
+		name: "addNever --global writes the global scope",
 		run: () => {
 			reset();
-			mkdirSync(join(pkg, ".pi"), { recursive: true });
-			writeFileSync(layerConfigPath(pkg), "{ not json");
-			return Array.isArray(loadConfig(nested).never);
+			addNever(loadConfig(A), "global-rule", "global");
+			const store = readStore();
+			return JSON.stringify(store.global?.never) === JSON.stringify(["global-rule"]) &&
+				store.directories === undefined;
+		},
+	},
+	{
+		name: "adding to one directory leaves other directories alone",
+		run: () => {
+			reset();
+			addNever(loadConfig(A), "a-rule", "dir");
+			addNever(loadConfig(B), "b-rule", "dir");
+			const store = readStore();
+			return (
+				JSON.stringify(store.directories?.[dirKey(A)]?.never) === JSON.stringify(["a-rule"]) &&
+				JSON.stringify(store.directories?.[dirKey(B)]?.never) === JSON.stringify(["b-rule"])
+			);
+		},
+	},
+	{
+		name: "removeNever edits the scope that declares the rule",
+		run: () => {
+			reset({
+				global: { never: ["g"] },
+				directories: { [dirKey(A)]: { never: ["d", "d2"] } },
+			});
+			removeNever(loadConfig(A), "g");
+			removeNever(loadConfig(A), "d");
+			const store = readStore();
+			return (
+				JSON.stringify(store.global?.never) === JSON.stringify([]) &&
+				JSON.stringify(store.directories?.[dirKey(A)]?.never) === JSON.stringify(["d2"])
+			);
+		},
+	},
+	{
+		name: "an object rule is written back as an object",
+		run: () => {
+			reset();
+			addNever(loadConfig(A), { text: "带词的", terms: ["甲", "乙"] }, "global");
+			const store = readStore();
+			const entry = store.global?.never?.[0] as { text?: string; terms?: string[] };
+			return entry?.text === "带词的" && JSON.stringify(entry.terms) === JSON.stringify(["甲", "乙"]);
+		},
+	},
+	{
+		name: "writing keeps keys the extension does not own",
+		run: () => {
+			reset({ global: { never: [], model: "p/m" } } as Store);
+			addNever(loadConfig(A), "x", "global");
+			const store = readStore();
+			return store.global?.model === "p/m";
+		},
+	},
+	{
+		name: "no temp file is left behind",
+		run: () => {
+			reset();
+			addNever(loadConfig(A), "x", "dir");
+			return !existsSync(`${storePath()}.tmp`);
+		},
+	},
+	{
+		name: "a broken store file does not throw",
+		run: () => {
+			writeFileSync(storePath(), "{ not json");
+			return loadConfig(A).never.length === 0;
+		},
+	},
+	{
+		name: "listDirectories reports each directory and its count",
+		run: () => {
+			reset({
+				directories: {
+					[dirKey(A)]: { never: ["a", "b"] },
+					[dirKey(B)]: { never: ["c"] },
+				},
+			});
+			const dirs = listDirectories(loadConfig(A));
+			return dirs.length === 2 && dirs.some((dir) => dir.key === dirKey(A) && dir.rules === 2);
+		},
+	},
+	{
+		name: "dirKey collapses . and .. segments",
+		run: () => dirKey(join(A, ".", "..", "alpha")) === dirKey(A),
+	},
+	{
+		name: "a legacy .pi/momentum.json is detected",
+		run: () => {
+			mkdirSync(join(B, ".pi"), { recursive: true });
+			writeFileSync(join(B, ".pi", "momentum.json"), "{}");
+			return legacyConfigPath(B) === join(B, ".pi", "momentum.json") && legacyConfigPath(A) === undefined;
 		},
 	},
 ];
