@@ -5,12 +5,17 @@ is easy because both were once referenced as "this session".
 
 | session | role | kept as |
 |---|---|---|
-| `01a1f161-1eb4-7234-882b-193dd06a2707` | the session that designed and built pi-momentum (`cwd=/Volumes/meatroll_disk/temp`) | `sessions/01a1f161….jsonl` — the migrated transcript (local-only) |
+| `01a1f161-1eb4-7234-882b-193dd06a2707` | the session that designed and built pi-momentum (`cwd=/Volumes/meatroll_disk/temp`) | `sessions/01a1f161….jsonl` — the archived transcript (committed) |
 | `01a166c1-ccbf-71ae-a652-4acaf29c56b6` | the 279-turn reverse-engineering session (`cwd=/Volumes/meatroll_disk/temp/guoguoreserve`) that supplies the measurements in the README and `docs/DESIGN.md` | `corpus/01a166c1….json` (committed); the 89 MB raw transcript stays in `~/.pi`, not in this project |
 
 The design session was pointed at the research session to study its turn endings
 (`01a1f161` entry #19). That is why the evidence comes from `01a166c1`, while the
 session being archived as the project's origin is `01a1f161`.
+
+The live copy of `01a1f161` now lives in Pi's session store for this project
+(`~/.pi/agent/sessions/--Volumes-meatroll_disk-temp-pi-momentum--/`), with its
+header `cwd` set to the project. The committed transcript keeps the original
+header (`cwd=/Volumes/meatroll_disk/temp`) as the historical record.
 
 ## Why the origin session has no corpus
 
