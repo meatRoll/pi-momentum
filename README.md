@@ -86,6 +86,6 @@ src/rules.ts     system prompt contract
 src/index.ts     the extension: inject, gate, cap, commands
 scripts/         corpus extraction + offline scoring
 test/smoke.ts    fake ExtensionAPI harness, no Pi boot required
-fixtures/        raw transcripts (gitignored) + derived corpus (committed)
+fixtures/        origin session transcript + derived evidence corpus
 docs/DESIGN.md   evidence, rule derivation, open questions
 ```
