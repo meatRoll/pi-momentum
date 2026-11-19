@@ -13,7 +13,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { loadConfig, writeProjectNever, type MomentumConfig } from "./config.ts";
+import { addNever, loadConfig, type MomentumConfig, type NeverScope, removeNever } from "./config.ts";
 import { analyzeTurnEnd, BLOCK_MARKER, continuationPrompt, DONE_MARKER } from "./detect.ts";
 import { RULES, SECTION_TAG } from "./rules.ts";
 import { buildSystemPrompt, type Decision, parseDecision } from "./virtual.ts";
@@ -182,23 +182,36 @@ export default function momentumExtension(pi: ExtensionAPI): void {
 				}
 				case "never": {
 					const [action = "list", ...words] = rest;
-					const entry = words.join(" ").trim();
+					const scopeFlag = words.includes("--global") ? "global" : words.includes("--repo") ? "repo" : undefined;
+					const entry = words
+						.filter((word) => !word.startsWith("--"))
+						.join(" ")
+						.trim();
+
 					if (action === "add" && entry) {
-						state.config.never = [...state.config.never, entry];
-						writeProjectNever(ctx.cwd, state.config.never);
+						const path = addNever(state.config, entry, scopeFlag ?? "repo");
+						if (!path) {
+							ctx.ui.notify("No repository found; use --global to add it for every project", "warning");
+							return;
+						}
 					} else if (action === "rm" && entry) {
-						const index = state.config.never.findIndex((item) => item === entry);
-						if (index < 0) {
+						// Remove from the scope that actually declares it.
+						const declared = state.config.rules.find((rule) => rule.text === entry);
+						if (!declared) {
 							ctx.ui.notify(`Not in the list: ${entry}`, "warning");
 							return;
 						}
-						state.config.never = state.config.never.filter((_item, i) => i !== index);
-						writeProjectNever(ctx.cwd, state.config.never);
+						removeNever(state.config, entry, scopeFlag ?? declared.scope);
 					}
+
+					state.config = loadConfig(ctx.cwd);
+					const where = state.config.repoRoot ?? "no repository";
+					const lines = state.config.rules.map(
+						(rule) => `  [${rule.scope}] ${rule.text}`,
+					);
 					ctx.ui.notify(
-						state.config.never.length === 0
-							? "momentum never-list is empty (defaults still apply)"
-							: `momentum never-list:\n${state.config.never.map((item) => `  - ${item}`).join("\n")}`,
+						`momentum never-rules (${where}${state.config.replace ? ", global list replaced" : ""}):\n` +
+							(lines.length > 0 ? lines.join("\n") : "  (none — built-in defaults still apply)"),
 						"info",
 					);
 					break;
@@ -317,8 +330,10 @@ export default function momentumExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_event, ctx) => {
 		state.config = loadConfig(ctx.cwd);
 		refreshStatus(state, ctx);
+		const repo = state.config.repoRoot;
 		ctx.ui.notify(
-			`pi-momentum ${state.mode}${state.dryRun ? " (dry-run)" : ""}. Markers: ${BLOCK_MARKER} / ${DONE_MARKER}`,
+			`pi-momentum ${state.mode}${state.dryRun ? " (dry-run)" : ""} · ${state.config.never.length} never-rules` +
+				`${repo ? ` (${repo.split("/").pop()})` : " (no repo)"}. Markers: ${BLOCK_MARKER} / ${DONE_MARKER}`,
 			"info",
 		);
 	});

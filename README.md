@@ -47,23 +47,34 @@ Runs on `agent_before_settle`, the last actionable boundary before a run goes id
 
 ### Never-list
 
-The virtual user must not authorize things you never want. It is a hard prefix in the prompt *and* a regex guardrail applied to the generated reply:
+The virtual user must not authorize things you never want. It is a hard prefix in the prompt *and* a regex guardrail applied to the generated reply.
+
+Rules are scoped **per repository**:
+
+| scope | file | applies to |
+|---|---|---|
+| `repo` | `<git-root>/.pi/momentum.json` | this repository only |
+| `global` | `~/.pi/agent/momentum.json` | every project |
 
 ```json
 {
-  "never": ["安装新软件", "删库", "推送到远程"]
+  "never": ["不要碰 vendor/", "不许改数据库迁移"],
+  "replace": false
 }
 ```
 
-```
-/momentum never list
-/momentum never add 不要碰 web 层
+The repo file is resolved from the **git root**, not the working directory, so starting Pi in `packages/foo/src` still finds the rules for the repository. Lists merge by default — a repo adding its own rules should not silently drop `别删数据`. Set `"replace": true` in the repo file when a repository genuinely needs a clean slate.
+
+```bash
+/momentum never list                  # shows [repo] / [global] per rule
+/momentum never add 不要碰 web 层     # writes the repo file
+/momentum never add --global 别删库    # writes the user file
 /momentum never rm 不要碰 web 层
 ```
 
-Built-in patterns cover five default categories (install software, delete/overwrite data, publish/deploy/push, change system config, pay for things) even when the list is empty.
+Built-in patterns cover five default categories (install software, delete/overwrite data, publish/deploy/push, change system config, pay for things) even when both lists are empty.
 
-Config file: `<cwd>/.pi/momentum.json`, falling back to `~/.pi/agent/momentum.json`. Edits are written to the project file.
+Config keys, both scopes: `never`, `replace`, `model`, `maxContinues`.
 
 ## Safety
 
