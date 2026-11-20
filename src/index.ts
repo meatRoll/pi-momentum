@@ -44,7 +44,7 @@ const SUBCOMMANDS = [
 	{ value: "test", label: "test", description: "simulate the reply for the last message; send nothing" },
 	{ value: "never", label: "never", description: "rules the reply must never contain (list | add | rm)" },
 	{ value: "dirs", label: "dirs", description: "directories with their own rules" },
-	{ value: "max", label: "max", description: "cap automatic replies per user turn" },
+	{ value: "max", label: "max", description: "cap automatic replies per user turn (off = no cap)" },
 	{ value: "prompt", label: "prompt", description: "print the virtual-user system prompt" },
 	{ value: "status", label: "status", description: "mode, version, rules" },
 ];
@@ -124,10 +124,22 @@ async function pickRule(ctx: ExtensionContext, config: MomentumConfig): Promise<
 	return index >= 0 ? config.rules[index]?.text : undefined;
 }
 
+/** `off` lifts the cap; a plain number sets it; anything else is a usage error. */
+function parseMaxArg(value: string): number | undefined {
+	if (/^(off|unlimited|inf|∞)$/i.test(value)) return Infinity;
+	if (!/^\d+$/.test(value)) return undefined;
+	const parsed = Number.parseInt(value, 10);
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+export function formatMax(max: number): string {
+	return Number.isFinite(max) ? String(max) : "∞";
+}
+
 function refreshStatus(state: MomentumState, ctx: ExtensionContext): void {
 	ctx.ui.setStatus(
 		"momentum",
-		state.on ? `⚡ ${state.continues}/${state.maxContinues}` : undefined,
+		state.on ? `⚡ ${state.continues}/${formatMax(state.maxContinues)}` : undefined,
 	);
 }
 
@@ -261,9 +273,9 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 					state.on = false;
 					break;
 				case "max": {
-					const parsed = Number.parseInt(value, 10);
-					if (!Number.isFinite(parsed) || parsed < 0) {
-						ctx.ui.notify("Usage: /momentum max <n>", "warning");
+					const parsed = parseMaxArg(value);
+					if (parsed === undefined) {
+						ctx.ui.notify("Usage: /momentum max <n> | off", "warning");
 						return;
 					}
 					state.maxContinues = parsed;
@@ -363,7 +375,7 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 
 			refreshStatus(state, ctx);
 			ctx.ui.notify(
-				`momentum v${VERSION}: ${state.on ? "on" : "off"} · max ${state.maxContinues} · ` +
+				`momentum v${VERSION}: ${state.on ? "on" : "off"} · max ${formatMax(state.maxContinues)} · ` +
 					(state.config.never.length === 0
 						? `no never-rules set (${DEFAULT_NEVER.length} built-in still active)`
 						: `${state.config.never.length} never-rules + ${DEFAULT_NEVER.length} built-in`),
@@ -437,6 +449,8 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 	// subcommands you have to remember.
 	pi.on("session_start", async (_event, ctx) => {
 		state.config = loadConfig(ctx.cwd);
+		// The file is the only way to make a limit survive a restart.
+		state.maxContinues = state.config.maxContinues ?? MAX_DEFAULT;
 		refreshStatus(state, ctx);
 
 		ctx.ui.addAutocompleteProvider((current) => ({
@@ -483,8 +497,11 @@ const NEVER_FLAGS = [
 	{ value: "--raw", label: "--raw", description: "store the sentence as typed, skip normalisation" },
 ];
 
-const MAX_OPTIONS = ["1", "2", "3", "5", "10"].map((value) => ({
-	value,
-	label: value,
-	description: "automatic replies per user turn",
-}));
+const MAX_OPTIONS = [
+	...["1", "2", "3", "5", "10"].map((value) => ({
+		value,
+		label: value,
+		description: "automatic replies per user turn",
+	})),
+	{ value: "off", label: "off", description: "no cap" },
+];

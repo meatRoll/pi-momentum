@@ -125,6 +125,28 @@ const cases: Case[] = [
 		},
 	},
 	{
+		name: "maxContinues accepts a number or the word infinite",
+		run: () => {
+			reset({ global: { maxContinues: 5 } } as Store);
+			const five = loadConfig(A).maxContinues;
+			reset({ global: { maxContinues: "infinite" } } as Store);
+			const infinite = loadConfig(A).maxContinues;
+			reset({ global: { maxContinues: -1 } } as Store);
+			const invalid = loadConfig(A).maxContinues;
+			return five === 5 && infinite === Infinity && invalid === undefined;
+		},
+	},
+	{
+		name: "a directory can lift the cap the global scope set",
+		run: () => {
+			reset({
+				global: { maxContinues: 1 },
+				directories: { [dirKey(A)]: { never: [], maxContinues: "infinite" } },
+			});
+			return loadConfig(A).maxContinues === Infinity && loadConfig(B).maxContinues === 1;
+		},
+	},
+	{
 		name: "addNever without a flag writes the directory scope",
 		run: () => {
 			reset();

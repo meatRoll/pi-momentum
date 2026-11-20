@@ -43,6 +43,7 @@ Two scopes, one file:
 /momentum never add --raw --global 别删库   # every directory
 /momentum never list                        # [dir] then [global], with terms
 /momentum never rm                          # picker; cancelling changes nothing
+/momentum max off                           # footer shows ⚡ 0/∞
 /momentum dirs                              # directories carrying their own rules
 ```
 

@@ -5,6 +5,7 @@
  *
  *   {
  *     "global":      { "never": [...], "model": "provider/id", "maxContinues": 3 },
+ *     // "maxContinues": "infinite" lifts the per-turn cap
  *     "directories": {
  *       "/abs/path/to/project": { "never": [...], "replace": true }
  *     }
@@ -44,6 +45,7 @@ export interface MomentumConfig {
 	/** True when the directory scope shadows the global list. */
 	replace: boolean;
 	model?: string;
+	/** Auto-replies allowed per user turn. `Infinity` means no cap. */
 	maxContinues?: number;
 	/** Absolute path of the settings file. */
 	storePath: string;
@@ -122,6 +124,16 @@ export function neverEntries(value: unknown): Array<{ text: string; terms?: stri
 	return out;
 }
 
+/**
+ * `maxContinues` is a number, or the string "infinite" so a hand-edited file
+ * can say what it means instead of encoding it as a magic number.
+ */
+function parseMax(value: unknown): number | undefined {
+	if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+	if (value === "infinite" || value === Infinity) return Infinity;
+	return undefined;
+}
+
 function collect(value: unknown, scope: Scope, rules: NeverRule[]): void {
 	for (const declared of neverEntries(value)) {
 		const key = declared.text.trim().toLowerCase();
@@ -151,12 +163,7 @@ export function loadConfig(cwd: string): MomentumConfig {
 			: typeof store.global?.model === "string"
 				? store.global.model
 				: undefined;
-	const maxContinues =
-		typeof dir?.maxContinues === "number"
-			? dir.maxContinues
-			: typeof store.global?.maxContinues === "number"
-				? store.global.maxContinues
-				: undefined;
+	const maxContinues = parseMax(dir?.maxContinues) ?? parseMax(store.global?.maxContinues);
 
 	return {
 		never: rules.map((rule) => rule.text),

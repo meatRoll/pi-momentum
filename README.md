@@ -26,9 +26,22 @@ The raw transcript is private and is not in this repository; the figures above c
 /momentum off         # stop
 /momentum test        # simulate the reply for the last message, send nothing
 /momentum max 5       # raise the cap
+/momentum max off     # no cap at all
 ```
 
-Arguments complete on Tab, including nested ones (`never add`, `max 3`).
+Arguments complete on Tab, including nested ones (`never add`, `max off`).
+
+The cap is 3 automatic replies per user prompt by default. It exists so the
+extension cannot hold an unbounded conversation with itself: every reply you
+did not write is a reply that could be wrong, and three is enough for the usual
+"继续 / 可以 / 做吧" chain without letting a forty-step task run unattended.
+
+`max` lasts for the session. Make it survive a restart by putting it in the
+settings file, where `"infinite"` is the readable way to say "no cap":
+
+```json
+{ "global": { "maxContinues": "infinite" } }
+```
 
 ## What `on` does
 

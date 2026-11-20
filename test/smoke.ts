@@ -7,7 +7,7 @@
  * registers, and drives the gate through the cases that matter.
  */
 
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { analyzeTurnEnd } from "../src/detect.ts";
@@ -343,6 +343,35 @@ for (const testCase of CASES) {
 	console.log(`${raw ? "ok  " : "FAIL"}  never add --raw stores the text verbatim`);
 }
 
+// `/momentum max off` lifts the cap, and the status says so.
+{
+	const harness = await createHarness();
+	const { ctx } = harness;
+	await harness.handlers.get("session_start")!({ type: "session_start" }, ctx);
+	await harness.commands.get("momentum")!("on", ctx);
+	await harness.commands.get("momentum")!("max off", ctx);
+	const shown = harness.statuses.at(-1) === "\u26a1 0/\u221e";
+	if (!shown) failures++;
+	console.log(`${shown ? "ok  " : "FAIL"}  max off shows an unbounded counter`);
+}
+
+// The cap comes from the file when one is set, so a limit can outlive a restart.
+{
+	const harness = await createHarness();
+	const { ctx } = harness;
+	mkdirSync(join(process.env.HOME!, ".pi", "agent"), { recursive: true });
+	writeFileSync(
+		join(process.env.HOME!, ".pi", "agent", "momentum.json"),
+		JSON.stringify({ global: { maxContinues: "infinite" } }),
+	);
+	await harness.handlers.get("session_start")!({ type: "session_start" }, ctx);
+	await harness.commands.get("momentum")!("on", ctx);
+	const shown = harness.statuses.at(-1) === "\u26a1 0/\u221e";
+	writeFileSync(join(process.env.HOME!, ".pi", "agent", "momentum.json"), "{}");
+	if (!shown) failures++;
+	console.log(`${shown ? "ok  " : "FAIL"}  a maxContinues of \"infinite\" in the file survives a restart`);
+}
+
 // `never rm` without an argument asks which rule to drop, and only drops that one.
 {
 	const harness = await createHarness();
@@ -392,7 +421,7 @@ const autocompleteCases: Array<{ line: string; expect: string[] }> = [
 	{ line: "/momentum never add ", expect: [] },
 	{ line: "/momentum never add --", expect: ["--global", "--raw"] },
 	{ line: "/momentum never add --g", expect: ["--global"] },
-	{ line: "/momentum max ", expect: ["1", "2", "3", "5", "10"] },
+	{ line: "/momentum max ", expect: ["1", "2", "3", "5", "10", "off"] },
 	{ line: "/momentum zz", expect: [] },
 ];
 
@@ -418,5 +447,5 @@ if (failures > 0) {
 	console.error(`${failures} case(s) failed`);
 	process.exit(1);
 }
-console.log(`${CASES.length + autocompleteCases.length + 5} smoke cases pass`);
+console.log(`${CASES.length + autocompleteCases.length + 7} smoke cases pass`);
 console.log(`  detector: ${analyzeTurnEnd("要我接着做这个吗？").verdict}`);
