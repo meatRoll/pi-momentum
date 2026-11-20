@@ -20,6 +20,25 @@ const cases: Case[] = [
 		},
 	},
 	{
+		// Field evidence: session 01a166c1, 2026-11-20T03:25:37Z. deepseek-v4.1-flash
+		// emitted a complete decision and stopped before the closing brace, so the
+		// turn was read as "unparseable" and momentum stayed silent.
+		name: "a decision truncated after its last field is repaired",
+		run: () => {
+			const d = parseDecision(
+				'{"action":"continue","reply":"好，就按这个顺序继续做下去","reason":"它明确说了下一步计划却没执行，属于说了不做，需要推它去做"',
+			);
+			return d.action === "continue" && d.reply === "好，就按这个顺序继续做下去";
+		},
+	},
+	{
+		name: "a decision truncated inside a string is not repaired",
+		run: () => {
+			const d = parseDecision('{"action":"continue","reply":"好，就按这个顺序继');
+			return d.action === "stop" && d.reason === "unparseable response";
+		},
+	},
+	{
 		name: "fenced JSON is accepted",
 		run: () => parseDecision('```json\n{"action":"continue","reply":"按 A 做","reason":"它推荐 A"}\n```').reply === "按 A 做",
 	},

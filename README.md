@@ -67,6 +67,11 @@ what it is doing costs nothing to respect. The detector's reading of the turn
 Costs one cheap model call per stop. Pin a model with `"model": "provider/id"`
 in the config file; otherwise the active model is used.
 
+A response that stops between tokens is repaired before parsing: a decision whose
+fields are complete except for the closing brace still counts. A response cut
+inside a string is not repaired — half a sentence in the user's voice is worse
+than silence.
+
 Every decision writes a `pi-momentum/decision` entry: action, reply, reason, the
 text it read, the raw model response, latency and model. Entries that were
 actually sent carry `sent: true`, so a transcript can always tell a human from

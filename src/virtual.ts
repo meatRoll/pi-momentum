@@ -95,7 +95,15 @@ ${banned}
 {"action":"stop","reply":"","reason":"为什么不该继续"}`;
 }
 
-/** Pull the first balanced JSON object out of a model response. */
+/**
+ * Pull the first balanced JSON object out of a model response.
+ *
+ * A response that stops between tokens is repaired: models and relays do cut a
+ * reply short, and a decision whose fields are all complete except for the
+ * closing brace is still a decision. A response cut *inside* a string is not
+ * repaired — the value would be a truncated sentence, and injecting half a
+ * sentence in the user's voice is worse than saying nothing.
+ */
 export function extractJson(raw: string): string | undefined {
 	const text = raw.replace(/```(?:json)?/gi, "").trim();
 	const start = text.indexOf("{");
@@ -118,6 +126,8 @@ export function extractJson(raw: string): string | undefined {
 			if (depth === 0) return text.slice(start, i + 1);
 		}
 	}
+	// Truncated between tokens: all strings closed, only the braces are missing.
+	if (!inString && depth > 0) return text.slice(start) + "}".repeat(depth);
 	return undefined;
 }
 

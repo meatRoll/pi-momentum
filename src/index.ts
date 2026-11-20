@@ -64,6 +64,8 @@ interface DecisionEntry {
 	input: string;
 	raw?: string;
 	model?: string;
+	/** Why the response ended: "stop", "length", "error"… */
+	stop?: string;
 	ms: number;
 }
 
@@ -178,11 +180,12 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 		ctx: ExtensionContext,
 		text: string,
 		hint?: string,
-	): Promise<{ decision: Decision; raw: string }> {
+	): Promise<{ decision: Decision; raw: string; stop?: string }> {
 		const model = resolveModel(ctx);
 		if (!model) return { decision: { action: "stop", reply: "", reason: "no model available" }, raw: "" };
 
 		let raw = "";
+		let stopReason: string | undefined;
 		try {
 			const response = await ctx.modelRegistry.complete(
 				model,
@@ -203,14 +206,19 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 				} as never,
 				{},
 			);
+			stopReason = response.stopReason;
 			if (response.stopReason === "aborted" || response.stopReason === "error") {
-				return { decision: { action: "stop", reply: "", reason: `model ${response.stopReason}` }, raw };
+				return {
+					decision: { action: "stop", reply: "", reason: `model ${response.stopReason}` },
+					raw,
+					stop: response.stopReason,
+				};
 			}
 			raw = textOf(response.content);
 		} catch (error) {
 			return { decision: { action: "stop", reply: "", reason: `call failed: ${String(error)}` }, raw };
 		}
-		return { decision: parseDecision(raw, state.config.rules), raw };
+		return { decision: parseDecision(raw, state.config.rules), raw, stop: stopReason };
 	}
 
 	/**
@@ -264,6 +272,9 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 			if (expanded) {
 				box.addChild(new Text(theme.fg("muted", `in:  ${data.input}`), 0, 0));
 				if (data.raw) box.addChild(new Text(theme.fg("muted", `raw: ${data.raw}`), 0, 0));
+				if (data.stop && data.stop !== "stop") {
+					box.addChild(new Text(theme.fg("muted", `stop: ${data.stop}`), 0, 0));
+				}
 			}
 			return box;
 		});
@@ -437,7 +448,7 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 
 		const analysis = analyzeTurnEnd(text);
 		const startedAt = Date.now();
-		const { decision, raw } = await askVirtualUser(ctx, text, analysis.reason);
+		const { decision, raw, stop } = await askVirtualUser(ctx, text, analysis.reason);
 		const ms = Date.now() - startedAt;
 		const base = {
 			reply: decision.reply,
@@ -445,6 +456,7 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 			input: preview(text),
 			raw: raw.slice(0, 600),
 			model: ctx.model?.id,
+			stop,
 			ms,
 		};
 
