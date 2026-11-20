@@ -141,6 +141,29 @@ The default flips to `stop` for the same reason. In nudge mode a wrong "continue
 
 The never-list is a user-authored prefix plus a regex backstop, because substring matching does not survive paraphrase: `安装新软件或依赖` does not match `装一下新软件`. Built-in patterns cover the five categories; user entries are matched literally.
 
+## "Not waiting on you" is not a stop
+
+The first prompt framed the job as "is this text waiting on the user?" That is
+the wrong question, and a real turn shows it:
+
+```
+下一步（我接着做）
+
+把 entrydump.py 扩成入口快照 + 内存快照，形成 same-run seed blob。
+```
+
+The agent is not waiting on anyone. It named its next step and stopped. Under the
+old prompt the decision was `stop — 无需用户回话`, which is a correct reading of
+the text and a wrong outcome: the user's next action was to type "继续", and the
+extension exists to spare them that.
+
+So the prompt now asks three things instead of one: is it asking for a word, has
+it announced work it did not do, or is it genuinely finished. Announcing a next
+step and stopping is the second one, and the reply is short by construction —
+"继续", or the next step pushed back. The detector already separates the case
+(`stated a next step without executing it`) and passes that reading into the call
+as `<turnsignal>` so the model does not spend tokens rediscovering it.
+
 ## The trailing status slot
 
 Pi renders `ctx.ui.notify` as one dim line at the end of the chat, and it

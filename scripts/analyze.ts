@@ -122,6 +122,14 @@ const SELFTEST_CASES: Array<{ name: string; text: string; expect: Verdict }> = [
 	{ name: "blocked marker", text: "⏸ BLOCKED\n卡点：要不要清掉 470MB 中间产物。\n候选：A 清 / B 留\n推荐：A（可重建）", expect: "blocked" },
 	{ name: "done marker", text: "✓ DONE\n190 测试绿，工作区干净。", expect: "done" },
 	{ name: "question inside a code fence is not a question", text: "结论如下：\n```\n要我继续吗？\n```", expect: "continue" },
+	{
+		name: "announces the next step and says it will do it, then stops",
+		text:
+			"缺口\n\ndata/host-blocks.json 只覆盖 0x99fb0 / 0xf72a0，与本次 12 个入口不重叠。\n\n" +
+			"提交：9962f82，工作区干净，191 测试绿。\n\n下一步（我接着做）\n\n" +
+			"把 entrydump.py 扩成入口快照 + 内存快照，形成 same-run seed blob。",
+		expect: "continue",
+	},
 ];
 
 function selftest(): void {

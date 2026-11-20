@@ -34,6 +34,8 @@ interface Harness {
 	completeCalls: number;
 	selects: number;
 	selectOptions: string[];
+	/** The user message the last decision call received. */
+	decisionInput: string;
 	selectPick?: string;
 	/** Suggestions the autocomplete provider returns for a given editor line. */
 	suggestions: (line: string) => Promise<{ prefix: string; items: Array<{ value: string }> } | null>;
@@ -62,6 +64,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 	const counters = { completeCalls: 0, selects: 0 };
 	const selectOptions: string[] = [];
 	const selectState: { pick?: string } = {};
+	let decisionInput = "";
 	const autocomplete: Array<(current: unknown) => unknown> = [];
 
 	const current = {
@@ -75,9 +78,10 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 		model: { id: "fake-model", provider: "fake" },
 		modelRegistry: {
 			find: () => undefined,
-			complete: async (_model: unknown, context: { systemPrompt?: string }) => {
+			complete: async (_model: unknown, context: { systemPrompt?: string; messages?: Array<{ content?: Array<{ text?: string }> }> }) => {
 				counters.completeCalls += 1;
 				const isRule = context?.systemPrompt === RULE_PROMPT;
+				if (!isRule) decisionInput = context?.messages?.[0]?.content?.[0]?.text ?? "";
 				return {
 					content: [{ type: "text", text: (isRule ? options.ruleReply : options.modelReply) ?? CONTINUE_JSON }],
 					stopReason: "stop",
@@ -145,6 +149,9 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 			return counters.selects;
 		},
 		selectOptions,
+		get decisionInput() {
+			return decisionInput;
+		},
 		/** What the fake picker returns: undefined cancels. */
 		set selectPick(pick: string | undefined) {
 			selectState.pick = pick;
@@ -343,6 +350,19 @@ for (const testCase of CASES) {
 	console.log(`${raw ? "ok  " : "FAIL"}  never add --raw stores the text verbatim`);
 }
 
+// The detector's verdict rides along with the message, so the model does not have
+// to rediscover that the turn stated a next step and stopped.
+{
+	const harness = await createHarness({ lastAssistant: "下一步（我接着做）\n\n把 entrydump.py 扩成入口快照。" });
+	const { ctx } = harness;
+	await harness.handlers.get("session_start")!({ type: "session_start" }, ctx);
+	await harness.commands.get("momentum")!("on", ctx);
+	await harness.handlers.get("agent_settled")!(settledEvent(), ctx);
+	const carried = harness.decisionInput.includes("<turnsignal>stated a next step without executing it</turnsignal>");
+	if (!carried) failures++;
+	console.log(`${carried ? "ok  " : "FAIL"}  the turn signal reaches the decision call`);
+}
+
 // `/momentum max off` lifts the cap, and the status says so.
 {
 	const harness = await createHarness();
@@ -447,5 +467,5 @@ if (failures > 0) {
 	console.error(`${failures} case(s) failed`);
 	process.exit(1);
 }
-console.log(`${CASES.length + autocompleteCases.length + 7} smoke cases pass`);
+console.log(`${CASES.length + autocompleteCases.length + 8} smoke cases pass`);
 console.log(`  detector: ${analyzeTurnEnd("要我接着做这个吗？").verdict}`);

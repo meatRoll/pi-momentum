@@ -100,6 +100,19 @@ Now check the guardrails:
   `npm run corpus -- <session>` should tag those turns; `npm run analyze` should
   exclude them and print `(N excluded: replies injected by pi-momentum)`.
 
+## 4b. A stated next step is not a stop
+
+Paste the tail of a turn that announced work and ended anyway:
+
+```
+/momentum test 下一步（我接着做）
+
+把 entrydump.py 扩成入口快照。
+```
+
+It must not answer "无需用户回话". The agent already said what it is doing;
+silence here hands the user back a turn they never asked for.
+
 ## 5. The TPS line must survive
 
 With pi-tps installed, end a turn that makes momentum act. The chat should read:

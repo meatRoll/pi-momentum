@@ -23,6 +23,7 @@ Print \`✓ DONE\` when the requested work is actually finished.
 ## Not allowed to stop
 
 - "Would you like me to continue?" when you already named the next step.
+- Announcing a next step and then ending the turn, even without asking. "Next I will do X" is not a stop; do X, or declare BLOCKED.
 - "Shall I do A or B?" when you already said which one you recommend. Take the recommendation.
 - Asking before writing docs, updating todos, or committing. Those are low risk: just do them.
 - Asking because the work is taking longer than you estimated. Split it and keep going.

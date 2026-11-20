@@ -51,13 +51,18 @@ the same call produces the one-line reply a user would send, and the extension
 injects it as a real user message.
 
 The prompt is an intent reader, not a persona: understand what the message is
-asking for, then say the thing that keeps it moving. When the message offers
+asking for, then say the thing that keeps it moving. "Asking for" includes the
+case where it asks for nothing but announces a next step — "下一步（我接着做）"
+and then stops is still a stop, and the only thing a user would say there is
+"继续". When the message offers
 several options, it takes the one the agent itself recommended; with no
 recommendation it takes the smallest, most reversible step. Otherwise it stays
 silent and you get the turn back.
 
 `⏸ BLOCKED` and `✓ DONE` short-circuit before the model call: an agent that says
-what it is doing costs nothing to respect.
+what it is doing costs nothing to respect. The detector's reading of the turn
+("stated a next step without executing it") rides along in the user message as
+`<turnsignal>`, so the model does not have to rediscover it.
 
 Costs one cheap model call per stop. Pin a model with `"model": "provider/id"`
 in the config file; otherwise the active model is used.

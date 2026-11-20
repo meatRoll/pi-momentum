@@ -169,9 +169,15 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 	 * message is the agent's last words. Nothing else of the conversation reaches
 	 * the decision, so it cannot inherit the question it is answering.
 	 */
+	/**
+	 * One isolated call. `hint` is what the mechanical detector already knows —
+	 * it goes in the user message so the model does not have to rediscover that
+	 * the turn stated a next step, and can concentrate on whether to speak.
+	 */
 	async function askVirtualUser(
 		ctx: ExtensionContext,
 		text: string,
+		hint?: string,
 	): Promise<{ decision: Decision; raw: string }> {
 		const model = resolveModel(ctx);
 		if (!model) return { decision: { action: "stop", reply: "", reason: "no model available" }, raw: "" };
@@ -182,7 +188,18 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 				model,
 				{
 					systemPrompt: buildSystemPrompt(state.config.never),
-					messages: [{ role: "user", content: [{ type: "text", text }], timestamp: Date.now() }],
+					messages: [
+						{
+							role: "user" as const,
+							content: [
+								{
+									type: "text" as const,
+									text: hint ? `${text}\n\n<turnsignal>${hint}</turnsignal>` : text,
+								},
+							],
+							timestamp: Date.now(),
+						},
+					],
 				} as never,
 				{},
 			);
@@ -298,7 +315,7 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 						);
 						return;
 					}
-					const { decision, raw } = await askVirtualUser(ctx, text);
+					const { decision, raw } = await askVirtualUser(ctx, text, quick.reason);
 					ctx.ui.notify(
 						[
 							`momentum test (${source})`,
@@ -418,8 +435,9 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 		// finished turn.
 		if (analyzeTurnEnd(text).verdict !== "continue") return;
 
+		const analysis = analyzeTurnEnd(text);
 		const startedAt = Date.now();
-		const { decision, raw } = await askVirtualUser(ctx, text);
+		const { decision, raw } = await askVirtualUser(ctx, text, analysis.reason);
 		const ms = Date.now() - startedAt;
 		const base = {
 			reply: decision.reply,
