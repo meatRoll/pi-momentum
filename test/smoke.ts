@@ -404,6 +404,44 @@ for (const testCase of CASES) {
 	console.log(`${shown ? "ok  " : "FAIL"}  a maxContinues of \"infinite\" in the file survives a restart`);
 }
 
+// `/momentum go` answers once now, and the reply reaches the conversation.
+{
+	const harness = await createHarness({ lastAssistant: "要我接着做这个吗？" });
+	const { ctx } = harness;
+	await harness.handlers.get("session_start")!({ type: "session_start" }, ctx);
+	await harness.commands.get("momentum")!("go", ctx);
+
+	const entry = harness.entries.at(-1)?.data as { sent?: boolean; action?: string } | undefined;
+	const sent = harness.sent.at(-1) === "继续" && entry?.sent === true && entry?.action === "continue";
+	if (!sent) failures++;
+	console.log(`${sent ? "ok  " : "FAIL"}  go sends the reply into the conversation and audits it`);
+}
+
+// ...but it does not invent a reply the model did not produce.
+{
+	const harness = await createHarness({ lastAssistant: "要我接着做这个吗？", modelReply: STOP_JSON });
+	const { ctx } = harness;
+	await harness.handlers.get("session_start")!({ type: "session_start" }, ctx);
+	await harness.commands.get("momentum")!("go", ctx);
+
+	const silent = harness.sent.length === 0;
+	const noted = harness.notifications.some((message) => message.includes("stayed silent"));
+	if (!silent || !noted) failures++;
+	console.log(`${silent && noted ? "ok  " : "FAIL"}  go reports silence instead of sending`);
+}
+
+// A declared BLOCKED/DONE is not something go overrides.
+{
+	const harness = await createHarness({ lastAssistant: "✓ DONE\n全部完成。" });
+	const { ctx } = harness;
+	await harness.handlers.get("session_start")!({ type: "session_start" }, ctx);
+	await harness.commands.get("momentum")!("go", ctx);
+
+	const skipped = harness.sent.length === 0 && harness.completeCalls === 0;
+	if (!skipped) failures++;
+	console.log(`${skipped ? "ok  " : "FAIL"}  go does not override a DONE declaration`);
+}
+
 // A reasoning model gets the same thinking level the session runs at.
 {
 	const harness = await createHarness({ thinkingLevel: "max", lastAssistant: "要我接着做这个吗？" });
@@ -470,7 +508,7 @@ const probe = await createHarness();
 await probe.handlers.get("session_start")!({ type: "session_start" }, probe.ctx);
 
 const autocompleteCases: Array<{ line: string; expect: string[] }> = [
-	{ line: "/momentum ", expect: ["on", "off", "test", "never", "dirs", "max", "prompt", "status"] },
+	{ line: "/momentum ", expect: ["on", "off", "test", "go", "never", "dirs", "max", "prompt", "status"] },
 	{ line: "/momentum ne", expect: ["never"] },
 	{ line: "/momentum never ", expect: ["list", "add", "rm"] },
 	{ line: "/momentum never a", expect: ["add"] },
@@ -503,5 +541,5 @@ if (failures > 0) {
 	console.error(`${failures} case(s) failed`);
 	process.exit(1);
 }
-console.log(`${CASES.length + autocompleteCases.length + 10} smoke cases pass`);
+console.log(`${CASES.length + autocompleteCases.length + 13} smoke cases pass`);
 console.log(`  detector: ${analyzeTurnEnd("要我接着做这个吗？").verdict}`);

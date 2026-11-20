@@ -100,6 +100,17 @@ Now check the guardrails:
   `npm run corpus -- <session>` should tag those turns; `npm run analyze` should
   exclude them and print `(N excluded: replies injected by pi-momentum)`.
 
+## 4a. Manual trigger
+
+```
+/momentum go
+```
+
+One decision, sent into the conversation. The chat should show a
+`momentum sent → "…"` entry and then your reply as a user message. Run it again
+on a turn that ended with `✓ DONE`; it must refuse and say so instead of
+inventing an answer.
+
 ## 4b. A stated next step is not a stop
 
 Paste the tail of a turn that announced work and ended anyway:

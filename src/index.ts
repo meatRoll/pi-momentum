@@ -22,7 +22,7 @@ import {
 	type NeverRule,
 	removeNever,
 } from "./config.ts";
-import { analyzeTurnEnd, BLOCK_MARKER, DONE_MARKER } from "./detect.ts";
+import { analyzeTurnEnd, BLOCK_MARKER, DONE_MARKER, type TurnEndAnalysis } from "./detect.ts";
 import { RULES, SECTION_TAG } from "./rules.ts";
 import {
 	buildSystemPrompt,
@@ -42,6 +42,7 @@ const SUBCOMMANDS = [
 	{ value: "on", label: "on", description: "reply for you when the agent stops and is waiting" },
 	{ value: "off", label: "off", description: "do nothing" },
 	{ value: "test", label: "test", description: "simulate the reply for the last message; send nothing" },
+	{ value: "go", label: "go", description: "answer once now — sends the reply into the conversation" },
 	{ value: "never", label: "never", description: "rules the reply must never contain (list | add | rm)" },
 	{ value: "dirs", label: "dirs", description: "directories with their own rules" },
 	{ value: "max", label: "max", description: "cap automatic replies per user turn (off = no cap)" },
@@ -257,6 +258,45 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 		}
 	}
 
+	/**
+	 * Run the decision and act on it: log it, and send the reply when it says to.
+	 * Shared by the automatic gate and `/momentum go`, so the manual path cannot
+	 * drift from the automatic one.
+	 */
+	async function speak(ctx: ExtensionContext, text: string, analysis: TurnEndAnalysis) {
+		const startedAt = Date.now();
+		const { decision, raw, stop, model: usedModel, thinking } = await askVirtualUser(
+			ctx,
+			text,
+			analysis.reason,
+		);
+		const ms = Date.now() - startedAt;
+		const base = {
+			reply: decision.reply,
+			reason: decision.reason,
+			input: preview(text),
+			raw: raw.slice(0, 600),
+			model: usedModel,
+			thinking,
+			stop,
+			ms,
+		};
+
+		if (decision.action !== "continue" || !decision.reply) {
+			pi.appendEntry(DECISION_ENTRY_TYPE, { ...base, action: "stop", sent: false } satisfies DecisionEntry);
+			return { decision, ms };
+		}
+
+		state.continues += 1;
+		refreshStatus(state, ctx);
+
+		// Written before the message so the corpus extractor can tell this user
+		// message from a human one.
+		pi.appendEntry(DECISION_ENTRY_TYPE, { ...base, action: "continue", sent: true } satisfies DecisionEntry);
+		pi.sendUserMessage(decision.reply);
+		return { decision, ms };
+	}
+
 	if (tui) {
 		pi.registerEntryRenderer<DecisionEntry>(DECISION_ENTRY_TYPE, (entry, { expanded }, theme) => {
 			const data = entry.data;
@@ -300,7 +340,7 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 	});
 
 	pi.registerCommand("momentum", {
-		description: "pi-momentum: on | off | test [text] | never list|add|rm | max <n> | prompt",
+		description: "pi-momentum: on | off | go | test [text] | never list|add|rm | max <n> | prompt",
 		handler: async (args, ctx) => {
 			const [verb = "status", ...rest] = args.trim().split(/\s+/);
 			const value = rest.join(" ").trim();
@@ -350,6 +390,38 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 							`  in: ${preview(text, 160)}`,
 							`  raw: ${raw.slice(0, 400).replace(/\s+/g, " ")}`,
 						].join("\n"),
+						"info",
+					);
+					return;
+				}
+				case "go": {
+					// Answer once, now. Not a probe: a reply that says "continue" is sent.
+					if (!ctx.isIdle()) {
+						ctx.ui.notify("momentum: the agent is still running", "warning");
+						return;
+					}
+					const text = lastAssistantText(ctx);
+					if (!text.trim()) {
+						ctx.ui.notify("momentum: no assistant message to answer yet", "warning");
+						return;
+					}
+					const analysis = analyzeTurnEnd(text);
+					if (analysis.verdict !== "continue") {
+						ctx.ui.notify(
+							`momentum: nothing to answer — agent declared ${analysis.verdict.toUpperCase()}`,
+							"info",
+						);
+						return;
+					}
+					const before = state.continues;
+					const { decision, ms } = await speak(ctx, text, analysis);
+					if (decision.action !== "continue") {
+						ctx.ui.notify(`momentum: stayed silent — ${decision.reason || "nothing to add"}`, "info");
+						return;
+					}
+					ctx.ui.notify(
+						`momentum: sent "${decision.reply}" · ${decision.reason} · ${ms}ms` +
+							(state.continues > before ? ` · ${state.continues}/${formatMax(state.maxContinues)}` : ""),
 						"info",
 					);
 					return;
@@ -457,36 +529,11 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 		// Cheap pre-filter: an explicit BLOCKED/DONE needs no model call. Nothing is
 		// logged here — nothing happened, and logging it would be noise on every
 		// finished turn.
-		if (analyzeTurnEnd(text).verdict !== "continue") return;
-
 		const analysis = analyzeTurnEnd(text);
-		const startedAt = Date.now();
-		const { decision, raw, stop, model: usedModel, thinking } = await askVirtualUser(ctx, text, analysis.reason);
-		const ms = Date.now() - startedAt;
-		const base = {
-			reply: decision.reply,
-			reason: decision.reason,
-			input: preview(text),
-			raw: raw.slice(0, 600),
-			model: usedModel,
-			thinking,
-			stop,
-			ms,
-		};
+		if (analysis.verdict !== "continue") return;
 
-		if (decision.action !== "continue" || !decision.reply) {
-			pi.appendEntry(DECISION_ENTRY_TYPE, { ...base, action: "stop", sent: false } satisfies DecisionEntry);
-			ctx.ui.setStatus("momentum", `⚡ stop`);
-			return;
-		}
-
-		state.continues += 1;
-		refreshStatus(state, ctx);
-
-		// Written before the message so the corpus extractor can tell this user
-		// message from a human one.
-		pi.appendEntry(DECISION_ENTRY_TYPE, { ...base, action: "continue", sent: true } satisfies DecisionEntry);
-		pi.sendUserMessage(decision.reply);
+		const { decision } = await speak(ctx, text, analysis);
+		if (decision.action !== "continue") ctx.ui.setStatus("momentum", `⚡ stop`);
 	});
 
 	// Argument completion for `/momentum `. Without it the command is a list of

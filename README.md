@@ -24,10 +24,16 @@ The raw transcript is private and is not in this repository; the figures above c
 ```
 /momentum on          # start replying for you
 /momentum off         # stop
+/momentum go          # answer once now: the reply is sent as your message
 /momentum test        # simulate the reply for the last message, send nothing
 /momentum max 5       # raise the cap
 /momentum max off     # no cap at all
 ```
+
+`go` is the manual trigger: one decision, one answer, delivered. It runs the
+same path as the automatic gate — same prompt, same guardrails, same audit
+entry — and refuses to act while the agent is still streaming or when the turn
+declared `✓ DONE` / `⏸ BLOCKED`. `test` is the same call without the delivery.
 
 Arguments complete on Tab, including nested ones (`never add`, `max off`).
 
