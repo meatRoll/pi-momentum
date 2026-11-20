@@ -49,6 +49,8 @@ interface HarnessOptions {
 	lastAssistant?: string;
 	/** Reply used when the call is rule normalisation rather than a decision. */
 	ruleReply?: string;
+	/** Session thinking level the context reports. */
+	thinkingLevel?: string;
 }
 
 const CONTINUE_JSON = '{"action":"continue","reply":"继续","reason":"它在等确认"}';
@@ -65,6 +67,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 	const selectOptions: string[] = [];
 	const selectState: { pick?: string } = {};
 	let decisionInput = "";
+	let lastOptions: { reasoning?: string } = {};
 	const autocomplete: Array<(current: unknown) => unknown> = [];
 
 	const current = {
@@ -78,7 +81,12 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 		model: { id: "fake-model", provider: "fake" },
 		modelRegistry: {
 			find: () => undefined,
-			complete: async (_model: unknown, context: { systemPrompt?: string; messages?: Array<{ content?: Array<{ text?: string }> }> }) => {
+			complete: async (
+				_model: unknown,
+				context: { systemPrompt?: string; messages?: Array<{ content?: Array<{ text?: string }> }> },
+				callOptions?: { reasoning?: string },
+			) => {
+				lastOptions = callOptions ?? {};
 				counters.completeCalls += 1;
 				const isRule = context?.systemPrompt === RULE_PROMPT;
 				if (!isRule) decisionInput = context?.messages?.[0]?.content?.[0]?.text ?? "";
@@ -96,6 +104,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 				},
 			],
 		},
+		thinkingLevel: options.thinkingLevel,
 		isIdle: () => true,
 		ui: {
 			notify: (message: string) => notifications.push(message),
@@ -151,6 +160,9 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 		selectOptions,
 		get decisionInput() {
 			return decisionInput;
+		},
+		get lastOptions() {
+			return lastOptions;
 		},
 		/** What the fake picker returns: undefined cancels. */
 		set selectPick(pick: string | undefined) {
@@ -392,6 +404,30 @@ for (const testCase of CASES) {
 	console.log(`${shown ? "ok  " : "FAIL"}  a maxContinues of \"infinite\" in the file survives a restart`);
 }
 
+// A reasoning model gets the same thinking level the session runs at.
+{
+	const harness = await createHarness({ thinkingLevel: "max", lastAssistant: "要我接着做这个吗？" });
+	const { ctx } = harness;
+	await harness.handlers.get("session_start")!({ type: "session_start" }, ctx);
+	await harness.commands.get("momentum")!("on", ctx);
+	await harness.handlers.get("agent_settled")!(settledEvent(), ctx);
+	const forwarded = harness.lastOptions.reasoning === "max";
+	if (!forwarded) failures++;
+	console.log(`${forwarded ? "ok  " : "FAIL"}  the decision call inherits the session thinking level`);
+}
+
+// A session at "off" passes no level at all.
+{
+	const harness = await createHarness({ thinkingLevel: "off", lastAssistant: "要我接着做这个吗？" });
+	const { ctx } = harness;
+	await harness.handlers.get("session_start")!({ type: "session_start" }, ctx);
+	await harness.commands.get("momentum")!("on", ctx);
+	await harness.handlers.get("agent_settled")!(settledEvent(), ctx);
+	const omitted = harness.lastOptions.reasoning === undefined;
+	if (!omitted) failures++;
+	console.log(`${omitted ? "ok  " : "FAIL"}  a session at \"off\" sends no thinking level`);
+}
+
 // `never rm` without an argument asks which rule to drop, and only drops that one.
 {
 	const harness = await createHarness();
@@ -467,5 +503,5 @@ if (failures > 0) {
 	console.error(`${failures} case(s) failed`);
 	process.exit(1);
 }
-console.log(`${CASES.length + autocompleteCases.length + 8} smoke cases pass`);
+console.log(`${CASES.length + autocompleteCases.length + 10} smoke cases pass`);
 console.log(`  detector: ${analyzeTurnEnd("要我接着做这个吗？").verdict}`);

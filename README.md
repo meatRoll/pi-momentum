@@ -67,13 +67,20 @@ what it is doing costs nothing to respect. The detector's reading of the turn
 Costs one cheap model call per stop. Pin a model with `"model": "provider/id"`
 in the config file; otherwise the active model is used.
 
+The decision call runs at the session's thinking level. A reasoning model called
+with no level at all is a different model than the one thinking in your session:
+in the session this was measured on, `deepseek-v4.1-flash` at `thinkingLevel:
+max` answered cleanly, while the same model with no level stopped one brace
+short of a complete decision. A session at `off` sends no level.
+
 A response that stops between tokens is repaired before parsing: a decision whose
 fields are complete except for the closing brace still counts. A response cut
 inside a string is not repaired — half a sentence in the user's voice is worse
 than silence.
 
 Every decision writes a `pi-momentum/decision` entry: action, reply, reason, the
-text it read, the raw model response, latency and model. Entries that were
+text it read, the raw model response, the model that actually answered, the
+thinking level, the response's stop reason, and latency. Entries that were
 actually sent carry `sent: true`, so a transcript can always tell a human from
 the extension.
 

@@ -164,6 +164,27 @@ step and stopping is the second one, and the reply is short by construction —
 (`stated a next step without executing it`) and passes that reading into the call
 as `<turnsignal>` so the model does not spend tokens rediscovering it.
 
+## Thinking level is part of the model
+
+The decision is one isolated call. The first version sent `{}` as options, which
+means "no thinking level", which for a reasoning model is not the same model you
+are talking to.
+
+Field evidence, session `01a166c1` (2026-11-20T03:25:37Z):
+
+```
+session:  deepseek/deepseek-v4.1-flash, thinkingLevel "max", reasoning 90 tokens
+decision: same model, no level → 84 characters, missing its closing brace
+```
+
+A missing brace is a formatting failure, and formatting failures are what you get
+when a model that thinks first is asked not to. The call now mirrors
+`ctx.thinkingLevel` (an `off` session still sends nothing), and the entry records
+the level so the next surprise is attributable.
+
+The same evidence exposed a second lie: the entry recorded `ctx.model` while the
+call may have used `config.model`. It now records the model that answered.
+
 ## The trailing status slot
 
 Pi renders `ctx.ui.notify` as one dim line at the end of the chat, and it

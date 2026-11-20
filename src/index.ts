@@ -66,6 +66,8 @@ interface DecisionEntry {
 	model?: string;
 	/** Why the response ended: "stop", "length", "error"… */
 	stop?: string;
+	/** Thinking level the decision call ran with. */
+	thinking?: string;
 	ms: number;
 }
 
@@ -180,9 +182,15 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 		ctx: ExtensionContext,
 		text: string,
 		hint?: string,
-	): Promise<{ decision: Decision; raw: string; stop?: string }> {
+	): Promise<{ decision: Decision; raw: string; stop?: string; model?: string; thinking?: string }> {
 		const model = resolveModel(ctx);
 		if (!model) return { decision: { action: "stop", reply: "", reason: "no model available" }, raw: "" };
+
+		// Mirror the session's thinking level. Measured: a reasoning model called
+		// with no level at all stopped one brace short of a complete answer, while
+		// the same model at "max" inside the main loop answered cleanly.
+		const thinking = ctx.thinkingLevel && ctx.thinkingLevel !== "off" ? ctx.thinkingLevel : undefined;
+		const options = thinking ? { reasoning: thinking } : {};
 
 		let raw = "";
 		let stopReason: string | undefined;
@@ -204,7 +212,7 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 						},
 					],
 				} as never,
-				{},
+				options as never,
 			);
 			stopReason = response.stopReason;
 			if (response.stopReason === "aborted" || response.stopReason === "error") {
@@ -218,7 +226,7 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 		} catch (error) {
 			return { decision: { action: "stop", reply: "", reason: `call failed: ${String(error)}` }, raw };
 		}
-		return { decision: parseDecision(raw, state.config.rules), raw, stop: stopReason };
+		return { decision: parseDecision(raw, state.config.rules), raw, stop: stopReason, model: model.id, thinking };
 	}
 
 	/**
@@ -229,6 +237,10 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 	async function normaliseRule(ctx: ExtensionContext, text: string) {
 		const model = resolveModel(ctx);
 		if (!model) return { text };
+		// Same reason as the decision call: a JSON-only answer from a reasoning
+		// model degrades when the level it was trained to use is missing.
+		const thinking = ctx.thinkingLevel && ctx.thinkingLevel !== "off" ? ctx.thinkingLevel : undefined;
+		const options = thinking ? { reasoning: thinking } : {};
 		try {
 			const response = await ctx.modelRegistry.complete(
 				model,
@@ -236,7 +248,7 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 					systemPrompt: RULE_PROMPT,
 					messages: [{ role: "user", content: [{ type: "text", text }], timestamp: Date.now() }],
 				} as never,
-				{},
+				options as never,
 			);
 			if (response.stopReason === "aborted" || response.stopReason === "error") return { text };
 			return parseRuleResponse(textOf(response.content), text);
@@ -272,9 +284,10 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 			if (expanded) {
 				box.addChild(new Text(theme.fg("muted", `in:  ${data.input}`), 0, 0));
 				if (data.raw) box.addChild(new Text(theme.fg("muted", `raw: ${data.raw}`), 0, 0));
-				if (data.stop && data.stop !== "stop") {
-					box.addChild(new Text(theme.fg("muted", `stop: ${data.stop}`), 0, 0));
-				}
+				const diagnostics = [data.thinking ? `thinking: ${data.thinking}` : "", data.stop && data.stop !== "stop" ? `stop: ${data.stop}` : ""]
+					.filter(Boolean)
+					.join(" · ");
+				if (diagnostics) box.addChild(new Text(theme.fg("muted", diagnostics), 0, 0));
 			}
 			return box;
 		});
@@ -448,14 +461,15 @@ export default async function momentumExtension(pi: ExtensionAPI): Promise<void>
 
 		const analysis = analyzeTurnEnd(text);
 		const startedAt = Date.now();
-		const { decision, raw, stop } = await askVirtualUser(ctx, text, analysis.reason);
+		const { decision, raw, stop, model: usedModel, thinking } = await askVirtualUser(ctx, text, analysis.reason);
 		const ms = Date.now() - startedAt;
 		const base = {
 			reply: decision.reply,
 			reason: decision.reason,
 			input: preview(text),
 			raw: raw.slice(0, 600),
-			model: ctx.model?.id,
+			model: usedModel,
+			thinking,
 			stop,
 			ms,
 		};
